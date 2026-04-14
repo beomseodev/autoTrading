@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>미국 주식 포트폴리오 백테스터</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <p class="eyebrow">US STOCKS BACKTESTER</p>
+      <h1>미국 주식 포트폴리오 백테스터</h1>
+      <p class="hero-copy">
+        티커와 목표 비중, 투자금, 기간, 리밸런싱 기준을 입력해서
+        최종 자산, CAGR, MDD, 자산곡선을 확인해보세요.
+      </p>
+    </section>
+
+    <section class="panel form-panel">
+      <div class="panel-header">
+        <div>
+          <h2>입력 설정</h2>
+          <p>목표 비중은 합계 100%여야 합니다.</p>
+        </div>
+        <button id="add-position-btn" type="button" class="secondary-btn">티커 추가</button>
+      </div>
+
+      <form id="backtest-form">
+        <div id="positions" class="positions"></div>
+
+        <div class="grid two">
+          <label>
+            <span>초기 투자금 (USD)</span>
+            <input type="number" name="initialCapital" value="10000" min="1" step="0.01" required />
+          </label>
+          <label>
+            <span>기간 입력 방식</span>
+            <select id="period-mode" name="periodMode">
+              <option value="range">시작일 / 종료일</option>
+              <option value="lookback">최근 N년</option>
+            </select>
+          </label>
+        </div>
+
+        <div id="period-range-fields" class="grid two">
+          <label>
+            <span>시작일</span>
+            <input type="date" name="startDate" value="2020-01-01" required />
+          </label>
+          <label>
+            <span>종료일</span>
+            <input type="date" name="endDate" value="2024-12-31" required />
+          </label>
+        </div>
+
+        <div id="period-lookback-fields" class="grid one hidden">
+          <label>
+            <span>최근 N년</span>
+            <input type="number" name="lookbackYears" value="5" min="0.25" max="50" step="0.25" />
+          </label>
+        </div>
+
+        <div class="grid two">
+          <label>
+            <span>리밸런싱 모드</span>
+            <select id="rebalance-mode" name="rebalanceMode">
+              <option value="calendar">정기 리밸런싱</option>
+              <option value="rsi">RSI 리밸런싱</option>
+            </select>
+          </label>
+          <label id="frequency-field">
+            <span>정기 리밸런싱 주기</span>
+            <select name="frequency">
+              <option value="monthly">월간</option>
+              <option value="quarterly">분기</option>
+              <option value="yearly">연간</option>
+            </select>
+          </label>
+        </div>
+
+        <div id="rsi-fields" class="grid three hidden">
+          <label>
+            <span>RSI 기간</span>
+            <input type="number" name="rsiPeriod" value="14" min="2" max="200" />
+          </label>
+          <label>
+            <span>하단 기준</span>
+            <input type="number" name="lower" value="30" min="1" max="99" step="0.1" />
+          </label>
+          <label>
+            <span>상단 기준</span>
+            <input type="number" name="upper" value="70" min="1" max="99" step="0.1" />
+          </label>
+        </div>
+
+        <div class="grid three">
+          <label class="checkbox-field">
+            <span>소수점 주식 허용</span>
+            <input type="checkbox" name="fractionalShares" checked />
+          </label>
+          <label>
+            <span>수수료율 (0~1)</span>
+            <input type="number" name="feeRate" value="0" min="0" max="1" step="0.0001" />
+          </label>
+          <label>
+            <span>슬리피지율 (0~1)</span>
+            <input type="number" name="slippageRate" value="0" min="0" max="1" step="0.0001" />
+          </label>
+        </div>
+
+        <div class="form-actions">
+          <button id="submit-btn" type="submit" class="primary-btn">백테스트 실행</button>
+          <p id="status-text" class="status-text"></p>
+        </div>
+      </form>
+    </section>
+
+    <section class="panel result-panel">
+      <div class="panel-header">
+        <div>
+          <h2>결과</h2>
+          <p>요약 지표와 자산 변화를 확인하세요.</p>
+        </div>
+      </div>
+
+      <div id="summary-grid" class="summary-grid empty-state">
+        아직 실행한 결과가 없습니다.
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-header">
+          <h3>자산곡선</h3>
+          <span id="chart-range"></span>
+        </div>
+        <canvas id="equity-chart" width="960" height="360"></canvas>
+      </div>
+
+      <div class="tables">
+        <div class="table-card">
+          <h3>최종 보유 현황</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>티커</th>
+                  <th>주식 수</th>
+                  <th>평가금액</th>
+                  <th>비중</th>
+                </tr>
+              </thead>
+              <tbody id="holdings-body">
+                <tr><td colspan="4" class="empty-row">결과를 실행하면 표시됩니다.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="table-card">
+          <h3>리밸런싱 이벤트</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>날짜</th>
+                  <th>사유</th>
+                  <th>회전율</th>
+                </tr>
+              </thead>
+              <tbody id="events-body">
+                <tr><td colspan="3" class="empty-row">결과를 실행하면 표시됩니다.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <template id="position-template">
+    <div class="position-row">
+      <label>
+        <span>티커</span>
+        <input type="text" name="ticker" placeholder="AAPL" required />
+      </label>
+      <label>
+        <span>목표 비중 (%)</span>
+        <input type="number" name="targetWeight" min="0.01" max="100" step="0.01" required />
+      </label>
+      <button type="button" class="danger-btn remove-position-btn">삭제</button>
+    </div>
+  </template>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
+
