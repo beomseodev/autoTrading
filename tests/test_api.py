@@ -45,12 +45,16 @@ def test_backtest_api_returns_expected_shape() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert set(body.keys()) == {"summary", "equityCurve", "holdingsSnapshot", "rebalanceEvents"}
+    assert set(body.keys()) == {"summary", "equityCurve", "realEquityCurve", "holdingsSnapshot", "rebalanceEvents"}
     assert body["summary"]["initialCapital"] == 1000
     assert body["summary"]["monthlyContribution"] == 0
     assert body["summary"]["totalContributed"] == 1000
+    assert body["summary"]["inflationRatePct"] == 3
+    assert "realFinalValue" in body["summary"]
+    assert "realTotalReturnPct" in body["summary"]
     assert body["summary"]["xirrPct"] is not None
     assert len(body["equityCurve"]) == 3
+    assert len(body["realEquityCurve"]) == 3
     assert len(body["holdingsSnapshot"]) == 2
 
     app.dependency_overrides.clear()
@@ -83,7 +87,7 @@ def test_backtest_api_accepts_single_rsi_trigger_ticker() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert set(body.keys()) == {"summary", "equityCurve", "holdingsSnapshot", "rebalanceEvents"}
+    assert set(body.keys()) == {"summary", "equityCurve", "realEquityCurve", "holdingsSnapshot", "rebalanceEvents"}
 
     app.dependency_overrides.clear()
 
@@ -113,6 +117,8 @@ def test_backtest_api_accepts_monthly_contribution_and_hides_cagr() -> None:
     assert body["summary"]["totalContributed"] == 1000
     assert body["summary"]["cagrPct"] is None
     assert body["summary"]["xirrPct"] is not None
+    assert body["summary"]["realFinalValue"] <= body["summary"]["finalValue"]
+    assert len(body["realEquityCurve"]) == len(body["equityCurve"])
 
     app.dependency_overrides.clear()
 
@@ -142,6 +148,6 @@ def test_backtest_api_accepts_dividend_reinvestment_flag() -> None:
 
     assert response.status_code == 200
     body = response.json()
-    assert set(body.keys()) == {"summary", "equityCurve", "holdingsSnapshot", "rebalanceEvents"}
+    assert set(body.keys()) == {"summary", "equityCurve", "realEquityCurve", "holdingsSnapshot", "rebalanceEvents"}
 
     app.dependency_overrides.clear()

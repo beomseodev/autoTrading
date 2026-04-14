@@ -18,7 +18,12 @@ const holdingsBody = document.getElementById("holdings-body");
 const eventsBody = document.getElementById("events-body");
 const canvas = document.getElementById("equity-chart");
 const chartRange = document.getElementById("chart-range");
+const chartNote = document.getElementById("chart-note");
+const chartModeButtons = [...document.querySelectorAll("[data-chart-mode]")];
 const canvasContext = canvas.getContext("2d");
+let activeChartMode = "nominal";
+let chartSeries = { nominal: [], real: [] };
+let currentInflationRatePct = 3;
 
 function getTickerOptions() {
   return [...positionsContainer.querySelectorAll('.position-row input[name="ticker"]')]
@@ -84,14 +89,17 @@ function renderSummary(summary) {
     ["Initial capital", currency(summary.initialCapital)],
     ["Monthly contribution", currency(summary.monthlyContribution)],
     ["Total contributed", currency(summary.totalContributed)],
+    ["Inflation rate", percent(summary.inflationRatePct)],
     ["Deployed capital", currency(summary.deployedCapital)],
     ["Final value", currency(summary.finalValue)],
+    ["Real final value", currency(summary.realFinalValue)],
     ["Total return", percent(summary.totalReturnPct)],
+    ["Real total return", percent(summary.realTotalReturnPct)],
     ["XIRR", summary.xirrPct === null ? "-" : percent(summary.xirrPct)],
     ["MDD", percent(summary.mddPct)],
   ];
   if (summary.cagrPct !== null) {
-    items.splice(7, 0, ["CAGR", percent(summary.cagrPct)]);
+    items.splice(9, 0, ["CAGR", percent(summary.cagrPct)]);
   }
 
   summaryGrid.classList.remove("empty-state");
@@ -222,6 +230,29 @@ function drawChart(points) {
   chartRange.textContent = `${points[0].date} ~ ${points[points.length - 1].date}`;
 }
 
+function updateChartModeButtons() {
+  chartModeButtons.forEach((button) => {
+    const isActive = button.dataset.chartMode === activeChartMode;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-pressed", String(isActive));
+  });
+}
+
+function renderActiveChart() {
+  const points = chartSeries[activeChartMode] || [];
+  drawChart(points);
+  chartNote.textContent =
+    activeChartMode === "real"
+      ? `${currentInflationRatePct.toFixed(1)}% annual inflation, start-date purchasing power.`
+      : "Nominal portfolio value.";
+}
+
+function setChartMode(mode) {
+  activeChartMode = mode;
+  updateChartModeButtons();
+  renderActiveChart();
+}
+
 function buildPayload() {
   const formData = new FormData(form);
   const positions = [...positionsContainer.querySelectorAll(".position-row")].map((row) => ({
@@ -293,7 +324,12 @@ async function runBacktest(event) {
     renderSummary(body.summary);
     renderHoldings(body.holdingsSnapshot);
     renderEvents(body.rebalanceEvents);
-    drawChart(body.equityCurve);
+    currentInflationRatePct = Number(body.summary.inflationRatePct);
+    chartSeries = {
+      nominal: body.equityCurve,
+      real: body.realEquityCurve,
+    };
+    renderActiveChart();
     statusText.textContent = `Completed: ${body.summary.rebalanceCount} rebalance events`;
   } catch (error) {
     statusText.textContent = error.message;
@@ -334,6 +370,9 @@ addPositionButton.addEventListener("click", () => addPositionRow("", ""));
 periodModeSelect.addEventListener("change", togglePeriodFields);
 rebalanceModeSelect.addEventListener("change", toggleRebalanceFields);
 rsiSignalScopeSelect.addEventListener("change", toggleRsiScopeFields);
+chartModeButtons.forEach((button) => {
+  button.addEventListener("click", () => setChartMode(button.dataset.chartMode));
+});
 form.addEventListener("submit", runBacktest);
 
 addPositionRow("AAPL", 40);
@@ -342,4 +381,4 @@ addPositionRow("QQQ", 25);
 togglePeriodFields();
 syncRsiTriggerTickerOptions();
 toggleRebalanceFields();
-drawChart([]);
+setChartMode("nominal");

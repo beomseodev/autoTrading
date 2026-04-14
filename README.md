@@ -9,7 +9,7 @@ You can:
 - optionally add a monthly contribution
 - rebalance on a calendar schedule or by RSI signals
 - optionally auto-reinvest dividend cash
-- review summary metrics including CAGR/XIRR, the equity curve, holdings, and rebalance events
+- review summary metrics including CAGR/XIRR and inflation-adjusted real value, the equity curve, holdings, and rebalance events
 
 ## Features
 
@@ -31,7 +31,7 @@ You can:
   - slippage rate
 - Outputs:
   - summary metrics
-  - equity curve
+  - nominal / real equity curve
   - final holdings snapshot
   - rebalance event history
 
@@ -176,6 +176,9 @@ Example request:
 - `summary.totalReturnPct` is calculated against `summary.totalContributed`.
 - `summary.cagrPct` is returned only for lump-sum backtests with `monthlyContribution=0`.
 - `summary.xirrPct` is returned when the portfolio cash-flow schedule has a valid XIRR solution.
+- A fixed 3% annual inflation rate is applied to produce start-date purchasing-power metrics.
+- `summary.realFinalValue` and `summary.realTotalReturnPct` are inflation-adjusted values in start-date dollars.
+- The chart can be toggled between nominal value and real value using the same date range.
 
 ## Tests
 
@@ -197,5 +200,5 @@ Included coverage:
 - fractional vs integer share behavior
 - trading cost impact
 - split-day regression coverage for TQQQ-style split dates
-- CAGR, XIRR, and MDD calculations
+- CAGR, XIRR, inflation-adjusted real value, and MDD calculations
 - API response shape

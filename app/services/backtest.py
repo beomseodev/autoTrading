@@ -19,6 +19,8 @@ class TradeResult:
 
 
 class BacktestService:
+    INFLATION_RATE = 0.03
+
     def __init__(self, data_provider: YFinanceDataProvider | None = None) -> None:
         self.data_provider = data_provider or YFinanceDataProvider()
 
@@ -57,7 +59,9 @@ class BacktestService:
         contribution_dates = self._monthly_contribution_dates(prices.index, request.monthlyContribution)
         rsi_schedule = self._rsi_rebalance_schedule(prices, request) if request.rebalance.mode == "rsi" else {}
 
+        base_date = prices.index[0].date()
         equity_curve: list[EquityPoint] = []
+        real_equity_curve: list[EquityPoint] = []
         for index_position, timestamp in enumerate(prices.index):
             current_prices = prices.loc[timestamp]
 
@@ -145,10 +149,22 @@ class BacktestService:
 
             portfolio_value = cash + float((holdings * current_prices).sum())
             equity_curve.append(EquityPoint(date=timestamp.date(), value=round(portfolio_value, 4)))
+            real_equity_curve.append(
+                EquityPoint(
+                    date=timestamp.date(),
+                    value=round(self._to_real_value(portfolio_value, base_date, timestamp.date()), 4),
+                )
+            )
 
         final_prices = prices.iloc[-1]
         final_value = cash + float((holdings * final_prices).sum())
+        real_final_value = self._to_real_value(final_value, base_date, prices.index[-1].date())
         deployed_capital = total_contributed - cash
+        real_total_contributed = sum(
+            self._to_real_value(-amount, base_date, flow_date)
+            for flow_date, amount in cash_flows
+            if amount < 0
+        )
         holdings_value = holdings * final_prices
 
         holdings_snapshot = [
@@ -162,6 +178,7 @@ class BacktestService:
         ]
 
         total_return_pct = ((final_value / total_contributed) - 1) * 100
+        real_total_return_pct = ((real_final_value / real_total_contributed) - 1) * 100
         cagr_pct = None
         if request.monthlyContribution == 0:
             elapsed_days = max((prices.index[-1] - prices.index[0]).days, 1)
@@ -179,15 +196,19 @@ class BacktestService:
                 initialCapital=round(request.initialCapital, 4),
                 monthlyContribution=round(request.monthlyContribution, 4),
                 totalContributed=round(total_contributed, 4),
+                inflationRatePct=round(self.INFLATION_RATE * 100, 4),
                 deployedCapital=round(deployed_capital, 4),
                 finalValue=round(final_value, 4),
+                realFinalValue=round(real_final_value, 4),
                 totalReturnPct=round(total_return_pct, 4),
+                realTotalReturnPct=round(real_total_return_pct, 4),
                 cagrPct=round(cagr_pct, 4) if cagr_pct is not None else None,
                 xirrPct=round(xirr_pct, 4) if xirr_pct is not None else None,
                 mddPct=round(mdd_pct, 4),
                 rebalanceCount=len(events),
             ),
             equityCurve=equity_curve,
+            realEquityCurve=real_equity_curve,
             holdingsSnapshot=holdings_snapshot,
             rebalanceEvents=events,
         )
@@ -300,6 +321,10 @@ class BacktestService:
                 low_npv = mid_npv
 
         return ((low_rate + high_rate) / 2) * 100
+
+    def _to_real_value(self, nominal_value: float, base_date: date, value_date: date) -> float:
+        elapsed_years = max((value_date - base_date).days, 0) / 365.25
+        return nominal_value / ((1 + self.INFLATION_RATE) ** elapsed_years)
 
     def _rsi_rebalance_schedule(self, prices: pd.DataFrame, request: BacktestRequest) -> dict[pd.Timestamp, str]:
         schedule: dict[pd.Timestamp, str] = {}

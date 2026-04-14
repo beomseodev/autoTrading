@@ -105,9 +105,12 @@ class SummaryOutput(BaseModel):
     initialCapital: float
     monthlyContribution: float
     totalContributed: float
+    inflationRatePct: float
     deployedCapital: float
     finalValue: float
+    realFinalValue: float
     totalReturnPct: float
+    realTotalReturnPct: float
     cagrPct: float | None
     xirrPct: float | None
     mddPct: float
@@ -135,5 +138,6 @@ class RebalanceEvent(BaseModel):
 class BacktestResponse(BaseModel):
     summary: SummaryOutput
     equityCurve: list[EquityPoint]
+    realEquityCurve: list[EquityPoint]
     holdingsSnapshot: list[HoldingSnapshot]
     rebalanceEvents: list[RebalanceEvent]

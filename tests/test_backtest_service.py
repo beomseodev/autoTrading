@@ -138,6 +138,8 @@ def test_zero_monthly_contribution_preserves_lump_sum_behavior() -> None:
     assert explicit_zero.summary.totalContributed == pytest.approx(baseline.summary.initialCapital, rel=1e-6)
     assert explicit_zero.summary.cagrPct == pytest.approx(baseline.summary.cagrPct, rel=1e-6)
     assert explicit_zero.summary.xirrPct == pytest.approx(baseline.summary.xirrPct, rel=1e-6)
+    assert explicit_zero.summary.realFinalValue == pytest.approx(baseline.summary.realFinalValue, rel=1e-6)
+    assert explicit_zero.summary.realTotalReturnPct == pytest.approx(baseline.summary.realTotalReturnPct, rel=1e-6)
 
 
 def test_fractional_share_toggle_changes_deployed_capital() -> None:
@@ -754,6 +756,68 @@ def test_cagr_and_mdd_match_expected_values() -> None:
     assert result.summary.cagrPct == pytest.approx(10.0, abs=0.05)
     assert result.summary.xirrPct == pytest.approx(10.0, abs=0.05)
     assert result.summary.mddPct == pytest.approx(0.0, abs=1e-6)
+
+
+def test_real_equity_curve_starts_equal_and_stays_below_nominal_curve() -> None:
+    prices = make_prices()
+    service = BacktestService(FakeProvider(prices))
+
+    result = service.run(make_request())
+
+    assert result.realEquityCurve[0].value == pytest.approx(result.equityCurve[0].value, rel=1e-6)
+    assert len(result.realEquityCurve) == len(result.equityCurve)
+    for nominal_point, real_point in zip(result.equityCurve, result.realEquityCurve):
+        assert real_point.date == nominal_point.date
+        assert real_point.value <= nominal_point.value + 1e-6
+
+
+def test_real_value_and_return_match_expected_inflation_adjustment() -> None:
+    index = pd.to_datetime(["2024-01-02", "2025-01-02"])
+    prices = pd.DataFrame({"AAA": [100, 110]}, index=index, dtype=float)
+    service = BacktestService(FakeProvider(prices))
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 100}],
+            "initialCapital": 1000,
+            "period": {"startDate": "2024-01-02", "endDate": "2025-01-02"},
+            "rebalance": {"mode": "calendar", "frequency": "yearly"},
+        }
+    )
+
+    result = service.run(request)
+    elapsed_years = (date(2025, 1, 2) - date(2024, 1, 2)).days / 365.25
+    expected_real_final = 1100 / ((1 + service.INFLATION_RATE) ** elapsed_years)
+    expected_real_return = ((expected_real_final / 1000) - 1) * 100
+
+    assert result.summary.inflationRatePct == pytest.approx(3.0, rel=1e-6)
+    assert result.summary.realFinalValue == pytest.approx(expected_real_final, abs=1e-4)
+    assert result.summary.realTotalReturnPct == pytest.approx(expected_real_return, abs=1e-4)
+
+
+def test_real_total_return_uses_inflation_adjusted_contributions() -> None:
+    index = pd.to_datetime(["2024-01-31", "2024-02-01", "2024-03-01", "2024-03-04"])
+    prices = pd.DataFrame({"AAA": [100, 100, 100, 100], "BBB": [100, 100, 100, 100]}, index=index, dtype=float)
+    service = BacktestService(FakeProvider(prices))
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 50}, {"ticker": "BBB", "targetWeight": 50}],
+            "initialCapital": 1000,
+            "monthlyContribution": 100,
+            "period": {"startDate": "2024-01-31", "endDate": "2024-03-04"},
+            "rebalance": {"mode": "calendar", "frequency": "yearly"},
+        }
+    )
+
+    result = service.run(request)
+    base_date = date(2024, 1, 31)
+    real_total_contributed = 1000
+    for contribution_date in [date(2024, 2, 1), date(2024, 3, 1)]:
+        elapsed_years = (contribution_date - base_date).days / 365.25
+        real_total_contributed += 100 / ((1 + service.INFLATION_RATE) ** elapsed_years)
+    expected_real_return = ((result.summary.realFinalValue / real_total_contributed) - 1) * 100
+
+    assert result.summary.totalContributed == pytest.approx(1200.0, rel=1e-6)
+    assert result.summary.realTotalReturnPct == pytest.approx(expected_real_return, abs=1e-4)
 
 
 def test_xirr_reflects_staggered_monthly_cash_flows() -> None:

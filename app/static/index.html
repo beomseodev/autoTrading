@@ -153,8 +153,15 @@
       <div class="chart-card">
         <div class="chart-header">
           <h3>Equity Curve</h3>
-          <span id="chart-range"></span>
+          <div class="chart-meta">
+            <div class="chart-mode-toggle" role="group" aria-label="Chart mode">
+              <button type="button" class="chart-mode-btn active" data-chart-mode="nominal" aria-pressed="true">Nominal</button>
+              <button type="button" class="chart-mode-btn" data-chart-mode="real" aria-pressed="false">Real</button>
+            </div>
+            <span id="chart-range"></span>
+          </div>
         </div>
+        <p id="chart-note" class="chart-note">Nominal portfolio value.</p>
         <canvas id="equity-chart" width="960" height="360"></canvas>
       </div>
 
