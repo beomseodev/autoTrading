@@ -82,12 +82,17 @@ function percent(value) {
 function renderSummary(summary) {
   const items = [
     ["Initial capital", currency(summary.initialCapital)],
+    ["Monthly contribution", currency(summary.monthlyContribution)],
+    ["Total contributed", currency(summary.totalContributed)],
     ["Deployed capital", currency(summary.deployedCapital)],
     ["Final value", currency(summary.finalValue)],
     ["Total return", percent(summary.totalReturnPct)],
-    ["CAGR", percent(summary.cagrPct)],
+    ["XIRR", summary.xirrPct === null ? "-" : percent(summary.xirrPct)],
     ["MDD", percent(summary.mddPct)],
   ];
+  if (summary.cagrPct !== null) {
+    items.splice(7, 0, ["CAGR", percent(summary.cagrPct)]);
+  }
 
   summaryGrid.classList.remove("empty-state");
   summaryGrid.innerHTML = items
@@ -255,6 +260,7 @@ function buildPayload() {
   return {
     positions,
     initialCapital: Number(formData.get("initialCapital")),
+    monthlyContribution: Number(formData.get("monthlyContribution")),
     period,
     rebalance,
     execution: {

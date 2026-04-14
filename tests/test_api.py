@@ -47,6 +47,9 @@ def test_backtest_api_returns_expected_shape() -> None:
     body = response.json()
     assert set(body.keys()) == {"summary", "equityCurve", "holdingsSnapshot", "rebalanceEvents"}
     assert body["summary"]["initialCapital"] == 1000
+    assert body["summary"]["monthlyContribution"] == 0
+    assert body["summary"]["totalContributed"] == 1000
+    assert body["summary"]["xirrPct"] is not None
     assert len(body["equityCurve"]) == 3
     assert len(body["holdingsSnapshot"]) == 2
 
@@ -81,6 +84,35 @@ def test_backtest_api_accepts_single_rsi_trigger_ticker() -> None:
     assert response.status_code == 200
     body = response.json()
     assert set(body.keys()) == {"summary", "equityCurve", "holdingsSnapshot", "rebalanceEvents"}
+
+    app.dependency_overrides.clear()
+
+
+def test_backtest_api_accepts_monthly_contribution_and_hides_cagr() -> None:
+    app.dependency_overrides[get_backtest_service] = lambda: BacktestService(FakeProvider())
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/backtests",
+        json={
+            "positions": [
+                {"ticker": "AAA", "targetWeight": 50},
+                {"ticker": "BBB", "targetWeight": 50},
+            ],
+            "initialCapital": 1000,
+            "monthlyContribution": 100,
+            "period": {"startDate": "2024-01-02", "endDate": "2024-01-04"},
+            "rebalance": {"mode": "calendar", "frequency": "monthly"},
+            "execution": {"fractionalShares": True, "feeRate": 0, "slippageRate": 0},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["summary"]["monthlyContribution"] == 100
+    assert body["summary"]["totalContributed"] == 1000
+    assert body["summary"]["cagrPct"] is None
+    assert body["summary"]["xirrPct"] is not None
 
     app.dependency_overrides.clear()
 

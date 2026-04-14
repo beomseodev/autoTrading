@@ -37,6 +37,8 @@ class BacktestService:
 
         holdings = pd.Series(0.0, index=tickers, dtype=float)
         cash = float(request.initialCapital)
+        total_contributed = float(request.initialCapital)
+        cash_flows: list[tuple[date, float]] = [(prices.index[0].date(), -float(request.initialCapital))]
         events: list[RebalanceEvent] = []
 
         initial_trade = self._rebalance_to_target(
@@ -50,9 +52,9 @@ class BacktestService:
         )
         holdings = initial_trade.holdings
         cash = initial_trade.cash
-        deployed_capital = request.initialCapital - cash
 
         calendar_dates = self._calendar_rebalance_dates(prices.index, request.rebalance.frequency)
+        contribution_dates = self._monthly_contribution_dates(prices.index, request.monthlyContribution)
         rsi_schedule = self._rsi_rebalance_schedule(prices, request) if request.rebalance.mode == "rsi" else {}
 
         equity_curve: list[EquityPoint] = []
@@ -87,6 +89,33 @@ class BacktestService:
                             )
                         )
 
+                if timestamp in contribution_dates:
+                    cash += request.monthlyContribution
+                    total_contributed += request.monthlyContribution
+                    cash_flows.append((timestamp.date(), -float(request.monthlyContribution)))
+                    portfolio_value_before_contribution_invest = cash + float((holdings * current_prices).sum())
+                    contribution_trade = self._invest_cash_by_weights(
+                        current_holdings=holdings,
+                        cash=cash,
+                        cash_to_invest=request.monthlyContribution,
+                        prices=current_prices,
+                        target_weights=target_weights,
+                        fractional_shares=request.execution.fractionalShares,
+                        fee_rate=request.execution.feeRate,
+                        slippage_rate=request.execution.slippageRate,
+                        portfolio_value=portfolio_value_before_contribution_invest,
+                    )
+                    holdings = contribution_trade.holdings
+                    cash = contribution_trade.cash
+                    if contribution_trade.turnover_pct > 1e-8:
+                        events.append(
+                            RebalanceEvent(
+                                date=timestamp.date(),
+                                reason="contribution:monthly",
+                                turnoverPct=round(contribution_trade.turnover_pct, 4),
+                            )
+                        )
+
                 reason = None
                 if request.rebalance.mode == "calendar" and timestamp in calendar_dates:
                     reason = f"calendar:{request.rebalance.frequency}"
@@ -118,7 +147,8 @@ class BacktestService:
             equity_curve.append(EquityPoint(date=timestamp.date(), value=round(portfolio_value, 4)))
 
         final_prices = prices.iloc[-1]
-        final_value = equity_curve[-1].value
+        final_value = cash + float((holdings * final_prices).sum())
+        deployed_capital = total_contributed - cash
         holdings_value = holdings * final_prices
 
         holdings_snapshot = [
@@ -131,10 +161,13 @@ class BacktestService:
             for ticker in tickers
         ]
 
-        total_return_pct = ((final_value / request.initialCapital) - 1) * 100
-        elapsed_days = max((prices.index[-1] - prices.index[0]).days, 1)
-        elapsed_years = elapsed_days / 365.25
-        cagr_pct = ((final_value / request.initialCapital) ** (1 / elapsed_years) - 1) * 100
+        total_return_pct = ((final_value / total_contributed) - 1) * 100
+        cagr_pct = None
+        if request.monthlyContribution == 0:
+            elapsed_days = max((prices.index[-1] - prices.index[0]).days, 1)
+            elapsed_years = elapsed_days / 365.25
+            cagr_pct = ((final_value / request.initialCapital) ** (1 / elapsed_years) - 1) * 100
+        xirr_pct = self._compute_xirr(cash_flows + [(prices.index[-1].date(), final_value)])
 
         equity_values = pd.Series([point.value for point in equity_curve], index=prices.index, dtype=float)
         running_max = equity_values.cummax()
@@ -144,10 +177,13 @@ class BacktestService:
         return BacktestResponse(
             summary=SummaryOutput(
                 initialCapital=round(request.initialCapital, 4),
+                monthlyContribution=round(request.monthlyContribution, 4),
+                totalContributed=round(total_contributed, 4),
                 deployedCapital=round(deployed_capital, 4),
                 finalValue=round(final_value, 4),
                 totalReturnPct=round(total_return_pct, 4),
-                cagrPct=round(cagr_pct, 4),
+                cagrPct=round(cagr_pct, 4) if cagr_pct is not None else None,
+                xirrPct=round(xirr_pct, 4) if xirr_pct is not None else None,
                 mddPct=round(mdd_pct, 4),
                 rebalanceCount=len(events),
             ),
@@ -176,6 +212,94 @@ class BacktestService:
         periods = trading_index.to_period(freq_map[frequency])
         first_days = pd.Series(trading_index, index=trading_index).groupby(periods).first()
         return set(first_days.iloc[1:].tolist())
+
+    def _monthly_contribution_dates(
+        self,
+        trading_index: pd.DatetimeIndex,
+        monthly_contribution: float,
+    ) -> set[pd.Timestamp]:
+        if monthly_contribution <= 0:
+            return set()
+
+        first_days = pd.Series(trading_index, index=trading_index).groupby(trading_index.to_period("M")).first()
+        return set(first_days.iloc[1:].tolist())
+
+    def _compute_xirr(self, cash_flows: list[tuple[date, float]]) -> float | None:
+        if len(cash_flows) < 2:
+            return None
+
+        if not any(amount < 0 for _, amount in cash_flows) or not any(amount > 0 for _, amount in cash_flows):
+            return None
+
+        base_date = cash_flows[0][0]
+        dated_amounts = [
+            ((flow_date - base_date).days / 365.25, amount)
+            for flow_date, amount in cash_flows
+        ]
+        if max(year_fraction for year_fraction, _ in dated_amounts) <= 0:
+            return None
+
+        def xnpv(rate: float) -> float:
+            return sum(amount / ((1 + rate) ** year_fraction) for year_fraction, amount in dated_amounts)
+
+        candidate_rates = [
+            -0.9999,
+            -0.99,
+            -0.95,
+            -0.9,
+            -0.75,
+            -0.5,
+            -0.25,
+            -0.1,
+            0.0,
+            0.05,
+            0.1,
+            0.2,
+            0.5,
+            1.0,
+            2.0,
+            5.0,
+            10.0,
+            20.0,
+            50.0,
+            100.0,
+        ]
+        npv_values = [xnpv(rate) for rate in candidate_rates]
+
+        bracket: tuple[float, float] | None = None
+        for left_rate, right_rate, left_npv, right_npv in zip(
+            candidate_rates,
+            candidate_rates[1:],
+            npv_values,
+            npv_values[1:],
+        ):
+            if left_npv == 0:
+                return left_rate * 100
+            if left_npv * right_npv < 0:
+                bracket = (left_rate, right_rate)
+                break
+
+        if bracket is None:
+            if npv_values[-1] == 0:
+                return candidate_rates[-1] * 100
+            return None
+
+        low_rate, high_rate = bracket
+        low_npv = xnpv(low_rate)
+
+        for _ in range(100):
+            mid_rate = (low_rate + high_rate) / 2
+            mid_npv = xnpv(mid_rate)
+            if abs(mid_npv) < 1e-10:
+                return mid_rate * 100
+
+            if low_npv * mid_npv <= 0:
+                high_rate = mid_rate
+            else:
+                low_rate = mid_rate
+                low_npv = mid_npv
+
+        return ((low_rate + high_rate) / 2) * 100
 
     def _rsi_rebalance_schedule(self, prices: pd.DataFrame, request: BacktestRequest) -> dict[pd.Timestamp, str]:
         schedule: dict[pd.Timestamp, str] = {}

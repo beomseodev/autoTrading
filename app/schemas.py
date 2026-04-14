@@ -76,6 +76,7 @@ class ExecutionInput(BaseModel):
 class BacktestRequest(BaseModel):
     positions: list[PositionInput]
     initialCapital: float = Field(gt=0)
+    monthlyContribution: float = Field(default=0, ge=0)
     period: PeriodInput
     rebalance: RebalanceInput
     execution: ExecutionInput = Field(default_factory=ExecutionInput)
@@ -102,10 +103,13 @@ class BacktestRequest(BaseModel):
 
 class SummaryOutput(BaseModel):
     initialCapital: float
+    monthlyContribution: float
+    totalContributed: float
     deployedCapital: float
     finalValue: float
     totalReturnPct: float
-    cagrPct: float
+    cagrPct: float | None
+    xirrPct: float | None
     mddPct: float
     rebalanceCount: int
 

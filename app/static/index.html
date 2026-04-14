@@ -12,8 +12,8 @@
       <p class="eyebrow">US STOCKS BACKTESTER</p>
       <h1>US Portfolio Backtester</h1>
       <p class="hero-copy">
-        Configure target weights, a backtest window, and rebalance rules to review final value,
-        CAGR, MDD, the equity curve, and executed rebalance events.
+        Configure target weights, a backtest window, rebalance rules, and optional monthly
+        contributions to review final value, CAGR/XIRR, MDD, the equity curve, and executed rebalance events.
       </p>
     </section>
 
@@ -29,10 +29,14 @@
       <form id="backtest-form">
         <div id="positions" class="positions"></div>
 
-        <div class="grid two">
+        <div class="grid three">
           <label>
             <span>Initial capital (USD)</span>
             <input type="number" name="initialCapital" value="10000" min="1" step="0.01" required />
+          </label>
+          <label>
+            <span>Monthly contribution (USD)</span>
+            <input type="number" name="monthlyContribution" value="0" min="0" step="0.01" />
           </label>
           <label>
             <span>Period input mode</span>

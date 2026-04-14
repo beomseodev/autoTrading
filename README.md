@@ -6,9 +6,10 @@ You can:
 
 - define target portfolio weights
 - choose a backtest window
+- optionally add a monthly contribution
 - rebalance on a calendar schedule or by RSI signals
 - optionally auto-reinvest dividend cash
-- review summary metrics, the equity curve, holdings, and rebalance events
+- review summary metrics including CAGR/XIRR, the equity curve, holdings, and rebalance events
 
 ## Features
 
@@ -23,6 +24,7 @@ You can:
   - `all`: monitor every portfolio ticker
   - `single`: monitor one selected portfolio ticker only
 - Execution options:
+  - monthly contribution
   - fractional shares
   - auto dividend reinvestment
   - fee rate
@@ -93,25 +95,26 @@ Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 1. Enter one or more valid Yahoo Finance tickers.
 2. Set target weights so the total is `100`.
 3. Enter the initial capital.
-4. Choose a period:
+4. Optionally enter a monthly contribution amount.
+5. Choose a period:
    - date range, or
    - trailing years
-5. Choose a rebalance mode:
+6. Choose a rebalance mode:
    - `calendar`
    - `rsi`
-6. For `calendar`, choose `monthly`, `quarterly`, or `yearly`.
-7. For `rsi`, set:
+7. For `calendar`, choose `monthly`, `quarterly`, or `yearly`.
+8. For `rsi`, set:
    - RSI period
    - lower threshold
    - upper threshold
    - RSI signal scope
-8. If RSI signal scope is `single`, choose one of the portfolio tickers as the trigger ticker.
-9. Optionally configure:
+9. If RSI signal scope is `single`, choose one of the portfolio tickers as the trigger ticker.
+10. Optionally configure:
    - fractional shares
    - auto dividend reinvestment
    - fee rate
    - slippage rate
-10. Run the backtest and review the result panels.
+11. Run the backtest and review the result panels.
 
 ## API
 
@@ -130,6 +133,7 @@ Example request:
     { "ticker": "TQQQ", "targetWeight": 50 }
   ],
   "initialCapital": 10000,
+  "monthlyContribution": 500,
   "period": {
     "startDate": "2020-01-01",
     "endDate": "2026-04-14"
@@ -157,6 +161,8 @@ Example request:
 - Tickers must be valid Yahoo Finance symbols.
   - Example: `SCHD` is valid.
   - Example: `SHCD` is not.
+- When `monthlyContribution > 0`, that cash is added on the first trading day of each month after the starting month.
+- Monthly contribution cash is invested immediately by target weights on the contribution day.
 - RSI signals are evaluated on the signal-day close, and RSI-triggered rebalances execute on the next trading day.
 - Price performance uses Yahoo Finance `Close` data plus explicit dividend cashflows.
 - Dividends are always added to portfolio cash.
@@ -167,6 +173,9 @@ Example request:
 - When `rebalance.rsiSignalScope="single"`, `rebalance.rsiTriggerTicker` must match one of the selected portfolio tickers.
 - Even in RSI `single` mode, a trigger rebalances the full portfolio back to target weights.
 - When `execution.dividendReinvestment` is omitted, it defaults to `true`.
+- `summary.totalReturnPct` is calculated against `summary.totalContributed`.
+- `summary.cagrPct` is returned only for lump-sum backtests with `monthlyContribution=0`.
+- `summary.xirrPct` is returned when the portfolio cash-flow schedule has a valid XIRR solution.
 
 ## Tests
 
@@ -179,12 +188,14 @@ Run:
 Included coverage:
 
 - request validation
+- monthly contribution validation and schedule rules
 - calendar rebalance date rules
 - RSI threshold-cross execution timing
 - single-ticker RSI signal scope behavior
 - dividend cash accounting and reinvestment behavior
+- monthly contribution investment ordering and trading-cost behavior
 - fractional vs integer share behavior
 - trading cost impact
 - split-day regression coverage for TQQQ-style split dates
-- CAGR and MDD calculations
+- CAGR, XIRR, and MDD calculations
 - API response shape

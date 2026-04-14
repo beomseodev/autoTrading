@@ -91,6 +91,19 @@ def test_period_validation_rejects_mixed_modes() -> None:
         )
 
 
+def test_monthly_contribution_must_be_non_negative() -> None:
+    with pytest.raises(ValueError):
+        BacktestRequest.model_validate(
+            {
+                "positions": [{"ticker": "AAA", "targetWeight": 100}],
+                "initialCapital": 1000,
+                "monthlyContribution": -1,
+                "period": {"startDate": "2024-01-02", "endDate": "2024-01-10"},
+                "rebalance": {"mode": "calendar", "frequency": "monthly"},
+            }
+        )
+
+
 def test_dividend_reinvestment_defaults_to_true() -> None:
     request = BacktestRequest.model_validate(
         {
@@ -112,6 +125,19 @@ def test_positions_with_custom_weights_drive_results() -> None:
     assert result.summary.finalValue == pytest.approx(1080.0, rel=1e-4)
     assert result.holdingsSnapshot[0].weight == pytest.approx(60.0, rel=1e-4)
     assert result.holdingsSnapshot[1].weight == pytest.approx(40.0, rel=1e-4)
+
+
+def test_zero_monthly_contribution_preserves_lump_sum_behavior() -> None:
+    prices = make_prices()
+    service = BacktestService(FakeProvider(prices))
+
+    baseline = service.run(make_request())
+    explicit_zero = service.run(make_request(monthlyContribution=0))
+
+    assert explicit_zero.summary.finalValue == pytest.approx(baseline.summary.finalValue, rel=1e-6)
+    assert explicit_zero.summary.totalContributed == pytest.approx(baseline.summary.initialCapital, rel=1e-6)
+    assert explicit_zero.summary.cagrPct == pytest.approx(baseline.summary.cagrPct, rel=1e-6)
+    assert explicit_zero.summary.xirrPct == pytest.approx(baseline.summary.xirrPct, rel=1e-6)
 
 
 def test_fractional_share_toggle_changes_deployed_capital() -> None:
@@ -170,6 +196,55 @@ def test_trading_costs_reduce_performance() -> None:
     assert with_costs.summary.finalValue < no_costs.summary.finalValue
 
 
+def test_monthly_contribution_starts_on_first_trading_day_of_next_month() -> None:
+    index = pd.to_datetime(["2024-01-15", "2024-02-01", "2024-02-02", "2024-03-01", "2024-03-04"])
+    prices = pd.DataFrame({"AAA": [100, 100, 100, 100, 100], "BBB": [100, 100, 100, 100, 100]}, index=index, dtype=float)
+    service = BacktestService(FakeProvider(prices))
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 50}, {"ticker": "BBB", "targetWeight": 50}],
+            "initialCapital": 1000,
+            "monthlyContribution": 100,
+            "period": {"startDate": "2024-01-15", "endDate": "2024-03-04"},
+            "rebalance": {"mode": "calendar", "frequency": "yearly"},
+        }
+    )
+
+    result = service.run(request)
+
+    assert result.summary.totalContributed == pytest.approx(1200.0, rel=1e-6)
+    assert result.summary.monthlyContribution == pytest.approx(100.0, rel=1e-6)
+    assert result.summary.rebalanceCount == 2
+    assert [event.date for event in result.rebalanceEvents] == [date(2024, 2, 1), date(2024, 3, 1)]
+    assert all(event.reason == "contribution:monthly" for event in result.rebalanceEvents)
+
+
+def test_monthly_contribution_is_invested_by_target_weights_immediately() -> None:
+    index = pd.to_datetime(["2024-01-31", "2024-02-01", "2024-02-02"])
+    prices = pd.DataFrame({"AAA": [100, 100, 100], "BBB": [50, 50, 50]}, index=index, dtype=float)
+    service = BacktestService(FakeProvider(prices))
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 60}, {"ticker": "BBB", "targetWeight": 40}],
+            "initialCapital": 1000,
+            "monthlyContribution": 100,
+            "period": {"startDate": "2024-01-31", "endDate": "2024-02-02"},
+            "rebalance": {"mode": "calendar", "frequency": "yearly"},
+        }
+    )
+
+    result = service.run(request)
+
+    assert result.summary.totalContributed == pytest.approx(1100.0, rel=1e-6)
+    assert result.summary.finalValue == pytest.approx(1100.0, rel=1e-6)
+    assert result.summary.cagrPct is None
+    assert result.summary.xirrPct == pytest.approx(0.0, abs=1e-6)
+    assert result.summary.rebalanceCount == 1
+    assert result.rebalanceEvents[0].reason == "contribution:monthly"
+    assert result.holdingsSnapshot[0].shares == pytest.approx(6.6, rel=1e-6)
+    assert result.holdingsSnapshot[1].shares == pytest.approx(8.8, rel=1e-6)
+
+
 def test_dividends_accumulate_as_cash_when_auto_reinvest_disabled() -> None:
     index = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])
     prices = pd.DataFrame({"AAA": [100, 100, 100], "BBB": [100, 100, 100]}, index=index, dtype=float)
@@ -217,6 +292,29 @@ def test_dividends_are_reinvested_by_target_weights_when_enabled() -> None:
     assert result.holdingsSnapshot[1].shares == pytest.approx(5.05, rel=1e-6)
 
 
+def test_monthly_contribution_happens_before_calendar_rebalance_on_same_day() -> None:
+    index = pd.to_datetime(["2024-01-31", "2024-02-01", "2024-02-02"])
+    prices = pd.DataFrame({"AAA": [100, 200, 200], "BBB": [100, 100, 100]}, index=index, dtype=float)
+    service = BacktestService(FakeProvider(prices))
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 50}, {"ticker": "BBB", "targetWeight": 50}],
+            "initialCapital": 1000,
+            "monthlyContribution": 100,
+            "period": {"startDate": "2024-01-31", "endDate": "2024-02-02"},
+            "rebalance": {"mode": "calendar", "frequency": "monthly"},
+        }
+    )
+
+    result = service.run(request)
+
+    assert result.summary.rebalanceCount == 2
+    assert result.rebalanceEvents[0].date == date(2024, 2, 1)
+    assert result.rebalanceEvents[0].reason == "contribution:monthly"
+    assert result.rebalanceEvents[1].date == date(2024, 2, 1)
+    assert result.rebalanceEvents[1].reason == "calendar:monthly"
+
+
 def test_dividend_reinvestment_combines_multiple_dividend_sources_once() -> None:
     index = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])
     prices = pd.DataFrame({"AAA": [100, 100, 100], "BBB": [100, 100, 100]}, index=index, dtype=float)
@@ -261,6 +359,32 @@ def test_dividend_reinvestment_with_integer_shares_leaves_cash_residual() -> Non
     assert result.holdingsSnapshot[1].shares == pytest.approx(8.0, rel=1e-6)
 
 
+def test_monthly_contribution_with_integer_shares_leaves_cash_residual() -> None:
+    index = pd.to_datetime(["2024-01-31", "2024-02-01", "2024-02-02"])
+    prices = pd.DataFrame({"AAA": [10, 10, 10], "BBB": [50, 50, 50]}, index=index, dtype=float)
+    service = BacktestService(FakeProvider(prices))
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 60}, {"ticker": "BBB", "targetWeight": 40}],
+            "initialCapital": 1000,
+            "monthlyContribution": 25,
+            "period": {"startDate": "2024-01-31", "endDate": "2024-02-02"},
+            "rebalance": {"mode": "calendar", "frequency": "yearly"},
+            "execution": {"fractionalShares": False, "dividendReinvestment": True, "feeRate": 0, "slippageRate": 0},
+        }
+    )
+
+    result = service.run(request)
+
+    assert result.summary.totalContributed == pytest.approx(1025.0, rel=1e-6)
+    assert result.summary.deployedCapital == pytest.approx(1010.0, rel=1e-6)
+    assert result.summary.finalValue == pytest.approx(1025.0, rel=1e-6)
+    assert result.summary.xirrPct == pytest.approx(0.0, abs=1e-6)
+    assert result.summary.rebalanceCount == 1
+    assert result.holdingsSnapshot[0].shares == pytest.approx(61.0, rel=1e-6)
+    assert result.holdingsSnapshot[1].shares == pytest.approx(8.0, rel=1e-6)
+
+
 def test_dividend_reinvestment_respects_trading_costs() -> None:
     index = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])
     prices = pd.DataFrame({"AAA": [10, 10, 10]}, index=index, dtype=float)
@@ -285,6 +409,40 @@ def test_dividend_reinvestment_respects_trading_costs() -> None:
                 "initialCapital": 1000,
                 "period": {"startDate": "2024-01-02", "endDate": "2024-01-04"},
                 "rebalance": {"mode": "calendar", "frequency": "monthly"},
+                "execution": {"fractionalShares": True, "dividendReinvestment": True, "feeRate": 0.1, "slippageRate": 0},
+            }
+        )
+    )
+
+    assert with_costs.holdingsSnapshot[0].shares < no_costs.holdingsSnapshot[0].shares
+    assert with_costs.summary.finalValue < no_costs.summary.finalValue
+
+
+def test_monthly_contribution_respects_trading_costs() -> None:
+    index = pd.to_datetime(["2024-01-31", "2024-02-01", "2024-02-02"])
+    prices = pd.DataFrame({"AAA": [10, 10, 10]}, index=index, dtype=float)
+    service = BacktestService(FakeProvider(prices))
+
+    no_costs = service.run(
+        BacktestRequest.model_validate(
+            {
+                "positions": [{"ticker": "AAA", "targetWeight": 100}],
+                "initialCapital": 1000,
+                "monthlyContribution": 100,
+                "period": {"startDate": "2024-01-31", "endDate": "2024-02-02"},
+                "rebalance": {"mode": "calendar", "frequency": "yearly"},
+                "execution": {"fractionalShares": True, "dividendReinvestment": True, "feeRate": 0, "slippageRate": 0},
+            }
+        )
+    )
+    with_costs = service.run(
+        BacktestRequest.model_validate(
+            {
+                "positions": [{"ticker": "AAA", "targetWeight": 100}],
+                "initialCapital": 1000,
+                "monthlyContribution": 100,
+                "period": {"startDate": "2024-01-31", "endDate": "2024-02-02"},
+                "rebalance": {"mode": "calendar", "frequency": "yearly"},
                 "execution": {"fractionalShares": True, "dividendReinvestment": True, "feeRate": 0.1, "slippageRate": 0},
             }
         )
@@ -594,4 +752,27 @@ def test_cagr_and_mdd_match_expected_values() -> None:
 
     assert result.summary.finalValue == pytest.approx(1100.0, rel=1e-4)
     assert result.summary.cagrPct == pytest.approx(10.0, abs=0.05)
+    assert result.summary.xirrPct == pytest.approx(10.0, abs=0.05)
     assert result.summary.mddPct == pytest.approx(0.0, abs=1e-6)
+
+
+def test_xirr_reflects_staggered_monthly_cash_flows() -> None:
+    index = pd.to_datetime(["2024-01-31", "2024-02-01", "2024-03-01", "2025-03-03"])
+    prices = pd.DataFrame({"AAA": [100, 100, 100, 120], "BBB": [100, 100, 100, 120]}, index=index, dtype=float)
+    service = BacktestService(FakeProvider(prices))
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 50}, {"ticker": "BBB", "targetWeight": 50}],
+            "initialCapital": 1000,
+            "monthlyContribution": 100,
+            "period": {"startDate": "2024-01-31", "endDate": "2025-03-03"},
+            "rebalance": {"mode": "calendar", "frequency": "yearly"},
+        }
+    )
+
+    result = service.run(request)
+
+    assert result.summary.totalContributed == pytest.approx(1300.0, rel=1e-6)
+    assert result.summary.finalValue == pytest.approx(1540.0, rel=1e-6)
+    assert result.summary.cagrPct is None
+    assert result.summary.xirrPct == pytest.approx(18.3922, abs=0.05)
