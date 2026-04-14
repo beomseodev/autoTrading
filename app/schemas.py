@@ -46,6 +46,14 @@ class RebalanceInput(BaseModel):
     rsiPeriod: int = Field(default=14, ge=2, le=200)
     lower: float = Field(default=30, gt=0, lt=100)
     upper: float = Field(default=70, gt=0, lt=100)
+    rsiSignalScope: Literal["all", "single"] = "all"
+    rsiTriggerTicker: str | None = None
+
+    @model_validator(mode="after")
+    def normalize_rsi_trigger_ticker(self) -> "RebalanceInput":
+        if self.rsiTriggerTicker is not None:
+            self.rsiTriggerTicker = self.rsiTriggerTicker.strip().upper() or None
+        return self
 
     @model_validator(mode="after")
     def validate_rebalance(self) -> "RebalanceInput":
@@ -53,11 +61,14 @@ class RebalanceInput(BaseModel):
             raise ValueError("frequency is required when mode is calendar.")
         if self.mode == "rsi" and self.lower >= self.upper:
             raise ValueError("lower must be smaller than upper.")
+        if self.mode == "rsi" and self.rsiSignalScope == "single" and self.rsiTriggerTicker is None:
+            raise ValueError("rsiTriggerTicker is required when rsiSignalScope is single.")
         return self
 
 
 class ExecutionInput(BaseModel):
     fractionalShares: bool = True
+    dividendReinvestment: bool = True
     feeRate: float = Field(default=0, ge=0, le=1)
     slippageRate: float = Field(default=0, ge=0, le=1)
 
@@ -81,6 +92,10 @@ class BacktestRequest(BaseModel):
         unique_tickers = {position.ticker for position in self.positions}
         if len(unique_tickers) != len(self.positions):
             raise ValueError("Duplicate tickers are not allowed.")
+
+        if self.rebalance.mode == "rsi" and self.rebalance.rsiSignalScope == "single":
+            if self.rebalance.rsiTriggerTicker not in unique_tickers:
+                raise ValueError("rsiTriggerTicker must match one of the selected position tickers.")
 
         return self
 
@@ -118,4 +133,3 @@ class BacktestResponse(BaseModel):
     equityCurve: list[EquityPoint]
     holdingsSnapshot: list[HoldingSnapshot]
     rebalanceEvents: list[RebalanceEvent]
-

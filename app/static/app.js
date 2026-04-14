@@ -9,6 +9,10 @@ const periodLookbackFields = document.getElementById("period-lookback-fields");
 const rebalanceModeSelect = document.getElementById("rebalance-mode");
 const frequencyField = document.getElementById("frequency-field");
 const rsiFields = document.getElementById("rsi-fields");
+const rsiScopeFields = document.getElementById("rsi-scope-fields");
+const rsiSignalScopeSelect = document.getElementById("rsi-signal-scope");
+const rsiTriggerField = document.getElementById("rsi-trigger-field");
+const rsiTriggerTickerSelect = document.getElementById("rsi-trigger-ticker");
 const summaryGrid = document.getElementById("summary-grid");
 const holdingsBody = document.getElementById("holdings-body");
 const eventsBody = document.getElementById("events-body");
@@ -16,21 +20,29 @@ const canvas = document.getElementById("equity-chart");
 const chartRange = document.getElementById("chart-range");
 const canvasContext = canvas.getContext("2d");
 
-function addPositionRow(ticker = "", targetWeight = "") {
-  const fragment = positionTemplate.content.cloneNode(true);
-  const row = fragment.querySelector(".position-row");
-  row.querySelector('input[name="ticker"]').value = ticker;
-  row.querySelector('input[name="targetWeight"]').value = targetWeight;
+function getTickerOptions() {
+  return [...positionsContainer.querySelectorAll('.position-row input[name="ticker"]')]
+    .map((input) => input.value.trim().toUpperCase())
+    .filter((ticker, index, allTickers) => ticker && allTickers.indexOf(ticker) === index);
+}
 
-  row.querySelector(".remove-position-btn").addEventListener("click", () => {
-    if (positionsContainer.children.length === 1) {
-      statusText.textContent = "포지션은 최소 1개 이상 필요합니다.";
-      return;
-    }
-    row.remove();
+function syncRsiTriggerTickerOptions() {
+  const tickers = getTickerOptions();
+  const previousValue = rsiTriggerTickerSelect.value;
+
+  rsiTriggerTickerSelect.innerHTML = "";
+  tickers.forEach((ticker) => {
+    const option = document.createElement("option");
+    option.value = ticker;
+    option.textContent = ticker;
+    rsiTriggerTickerSelect.appendChild(option);
   });
 
-  positionsContainer.appendChild(fragment);
+  if (!tickers.length) {
+    return;
+  }
+
+  rsiTriggerTickerSelect.value = tickers.includes(previousValue) ? previousValue : tickers[0];
 }
 
 function togglePeriodFields() {
@@ -39,10 +51,20 @@ function togglePeriodFields() {
   periodLookbackFields.classList.toggle("hidden", isRange);
 }
 
+function toggleRsiScopeFields() {
+  const showTriggerTicker =
+    rebalanceModeSelect.value === "rsi" && rsiSignalScopeSelect.value === "single";
+
+  rsiTriggerField.classList.toggle("hidden", !showTriggerTicker);
+  rsiTriggerTickerSelect.disabled = !showTriggerTicker || !rsiTriggerTickerSelect.options.length;
+}
+
 function toggleRebalanceFields() {
   const isCalendar = rebalanceModeSelect.value === "calendar";
   frequencyField.classList.toggle("hidden", !isCalendar);
   rsiFields.classList.toggle("hidden", isCalendar);
+  rsiScopeFields.classList.toggle("hidden", isCalendar);
+  toggleRsiScopeFields();
 }
 
 function currency(value) {
@@ -59,10 +81,10 @@ function percent(value) {
 
 function renderSummary(summary) {
   const items = [
-    ["초기 투자금", currency(summary.initialCapital)],
-    ["실투입 금액", currency(summary.deployedCapital)],
-    ["최종 금액", currency(summary.finalValue)],
-    ["총수익률", percent(summary.totalReturnPct)],
+    ["Initial capital", currency(summary.initialCapital)],
+    ["Deployed capital", currency(summary.deployedCapital)],
+    ["Final value", currency(summary.finalValue)],
+    ["Total return", percent(summary.totalReturnPct)],
     ["CAGR", percent(summary.cagrPct)],
     ["MDD", percent(summary.mddPct)],
   ];
@@ -82,7 +104,7 @@ function renderSummary(summary) {
 
 function renderHoldings(items) {
   if (!items.length) {
-    holdingsBody.innerHTML = '<tr><td colspan="4" class="empty-row">보유 데이터가 없습니다.</td></tr>';
+    holdingsBody.innerHTML = '<tr><td colspan="4" class="empty-row">No holdings data available.</td></tr>';
     return;
   }
 
@@ -102,7 +124,7 @@ function renderHoldings(items) {
 
 function renderEvents(events) {
   if (!events.length) {
-    eventsBody.innerHTML = '<tr><td colspan="3" class="empty-row">추가 리밸런싱 이벤트가 없습니다.</td></tr>';
+    eventsBody.innerHTML = '<tr><td colspan="3" class="empty-row">No rebalance events were triggered.</td></tr>';
     return;
   }
 
@@ -131,7 +153,7 @@ function drawChart(points) {
   if (!points.length) {
     canvasContext.fillStyle = "#6c6d72";
     canvasContext.font = "16px Segoe UI";
-    canvasContext.fillText("차트 데이터가 없습니다.", 36, 60);
+    canvasContext.fillText("No chart data available.", 36, 60);
     chartRange.textContent = "";
     return;
   }
@@ -223,7 +245,12 @@ function buildPayload() {
           rsiPeriod: Number(formData.get("rsiPeriod")),
           lower: Number(formData.get("lower")),
           upper: Number(formData.get("upper")),
+          rsiSignalScope: formData.get("rsiSignalScope"),
         };
+
+  if (rebalance.mode === "rsi" && rebalance.rsiSignalScope === "single") {
+    rebalance.rsiTriggerTicker = formData.get("rsiTriggerTicker")?.toString().trim().toUpperCase();
+  }
 
   return {
     positions,
@@ -232,6 +259,7 @@ function buildPayload() {
     rebalance,
     execution: {
       fractionalShares: formData.get("fractionalShares") === "on",
+      dividendReinvestment: formData.get("dividendReinvestment") === "on",
       feeRate: Number(formData.get("feeRate")),
       slippageRate: Number(formData.get("slippageRate")),
     },
@@ -242,7 +270,7 @@ async function runBacktest(event) {
   event.preventDefault();
 
   const payload = buildPayload();
-  statusText.textContent = "백테스트를 실행하고 있습니다...";
+  statusText.textContent = "Running backtest...";
 
   try {
     const response = await fetch("/api/backtests", {
@@ -253,27 +281,59 @@ async function runBacktest(event) {
 
     const body = await response.json();
     if (!response.ok) {
-      throw new Error(body.detail || "백테스트 실행 중 오류가 발생했습니다.");
+      throw new Error(body.detail || "Backtest request failed.");
     }
 
     renderSummary(body.summary);
     renderHoldings(body.holdingsSnapshot);
     renderEvents(body.rebalanceEvents);
     drawChart(body.equityCurve);
-    statusText.textContent = `완료: 리밸런싱 ${body.summary.rebalanceCount}회`;
+    statusText.textContent = `Completed: ${body.summary.rebalanceCount} rebalance events`;
   } catch (error) {
     statusText.textContent = error.message;
   }
 }
 
+function wirePositionRow(row) {
+  row.querySelector(".remove-position-btn").addEventListener("click", () => {
+    if (positionsContainer.children.length === 1) {
+      statusText.textContent = "At least one ticker is required.";
+      return;
+    }
+
+    row.remove();
+    syncRsiTriggerTickerOptions();
+    toggleRsiScopeFields();
+  });
+
+  row.querySelector('input[name="ticker"]').addEventListener("input", () => {
+    syncRsiTriggerTickerOptions();
+    toggleRsiScopeFields();
+  });
+}
+
+function addPositionRow(ticker = "", targetWeight = "") {
+  const fragment = positionTemplate.content.cloneNode(true);
+  const row = fragment.querySelector(".position-row");
+  row.querySelector('input[name="ticker"]').value = ticker;
+  row.querySelector('input[name="targetWeight"]').value = targetWeight;
+
+  wirePositionRow(row);
+  positionsContainer.appendChild(fragment);
+  syncRsiTriggerTickerOptions();
+  toggleRsiScopeFields();
+}
+
 addPositionButton.addEventListener("click", () => addPositionRow("", ""));
 periodModeSelect.addEventListener("change", togglePeriodFields);
 rebalanceModeSelect.addEventListener("change", toggleRebalanceFields);
+rsiSignalScopeSelect.addEventListener("change", toggleRsiScopeFields);
 form.addEventListener("submit", runBacktest);
 
 addPositionRow("AAPL", 40);
 addPositionRow("MSFT", 35);
 addPositionRow("QQQ", 25);
 togglePeriodFields();
+syncRsiTriggerTickerOptions();
 toggleRebalanceFields();
 drawChart([]);

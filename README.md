@@ -1,28 +1,50 @@
 # US Portfolio Backtester
 
-미국 주식/ETF 포트폴리오를 대상으로 목표 비중, 투자금, 백테스트 기간, 리밸런싱 기준을 입력해 성과를 확인하는 FastAPI 프로젝트입니다.
+FastAPI-based backtesting app for US stock and ETF portfolios.
 
-## 기능
+You can:
 
-- 티커와 목표 비중 입력
-- 초기 투자금과 백테스트 기간 입력
-- 정기 리밸런싱(`monthly`, `quarterly`, `yearly`) 지원
-- RSI 기반 리밸런싱(`lower`, `upper`, `rsiPeriod`) 지원
-- 거래 수수료, 슬리피지, 소수점 주식 옵션 지원
-- 결과 요약, 자산곡선, 최종 보유 비중, 리밸런싱 이벤트 제공
+- define target portfolio weights
+- choose a backtest window
+- rebalance on a calendar schedule or by RSI signals
+- optionally auto-reinvest dividend cash
+- review summary metrics, the equity curve, holdings, and rebalance events
 
-## 프로젝트 구조
+## Features
+
+- Multi-ticker portfolio input with target weights summing to `100`
+- Period input by:
+  - explicit `startDate` / `endDate`
+  - trailing `lookbackYears`
+- Rebalance modes:
+  - `calendar`: `monthly`, `quarterly`, `yearly`
+  - `rsi`: configurable `rsiPeriod`, `lower`, `upper`
+- RSI signal scope:
+  - `all`: monitor every portfolio ticker
+  - `single`: monitor one selected portfolio ticker only
+- Execution options:
+  - fractional shares
+  - auto dividend reinvestment
+  - fee rate
+  - slippage rate
+- Outputs:
+  - summary metrics
+  - equity curve
+  - final holdings snapshot
+  - rebalance event history
+
+## Project Structure
 
 ```text
 app/
-  main.py                 # FastAPI 앱과 라우팅
-  schemas.py              # 요청/응답 스키마
+  main.py                 # FastAPI app and routes
+  schemas.py              # Request/response models
   services/
-    backtest.py           # 백테스트 엔진
-    data_provider.py      # Yahoo Finance 데이터 로더
-    indicators.py         # RSI 계산
+    backtest.py           # Backtest engine
+    data_provider.py      # Yahoo Finance market data loader
+    indicators.py         # RSI calculation
   static/
-    index.html            # 단일 페이지 UI
+    index.html            # Single-page UI
     style.css
     app.js
 tests/
@@ -30,111 +52,139 @@ tests/
   test_backtest_service.py
 ```
 
-## 개발 환경 구성
+## Setup
 
-### 1. 가상환경 생성
+### 1. Create a virtual environment
 
 ```bash
 python -m venv .venv
 ```
 
-### 2. 가상환경 활성화
+### 2. Activate it
 
-Windows PowerShell:
+PowerShell:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
 ```
 
-Windows CMD:
+CMD:
 
 ```bat
 .venv\Scripts\activate.bat
 ```
 
-### 3. 의존성 설치
+### 3. Install dependencies
 
 ```bash
 pip install -e .[dev]
 ```
 
-## 서버 실행
+## Run the Server
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-브라우저에서 `http://127.0.0.1:8000`으로 접속하면 됩니다.
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
 
-## 사용 방법
+## Usage
 
-1. 포지션 영역에 티커와 목표 비중을 입력합니다.
-2. 목표 비중 합계가 100%인지 확인합니다.
-3. 초기 투자금(USD)을 입력합니다.
-4. 기간 입력 방식을 선택합니다.
-5. `시작일/종료일` 또는 `최근 N년` 중 하나로 기간을 입력합니다.
-6. 리밸런싱 모드를 선택합니다.
-7. `정기 리밸런싱`이면 월간/분기/연간 중 하나를 고릅니다.
-8. `RSI 리밸런싱`이면 RSI 기간, 하단 기준, 상단 기준을 입력합니다.
-9. 필요하면 수수료율, 슬리피지율, 소수점 주식 허용 여부를 조정합니다.
-10. `백테스트 실행` 버튼을 누릅니다.
-11. 결과 영역에서 최종 금액, 총수익률, CAGR, MDD, 자산곡선, 최종 보유 현황, 리밸런싱 이벤트를 확인합니다.
+1. Enter one or more valid Yahoo Finance tickers.
+2. Set target weights so the total is `100`.
+3. Enter the initial capital.
+4. Choose a period:
+   - date range, or
+   - trailing years
+5. Choose a rebalance mode:
+   - `calendar`
+   - `rsi`
+6. For `calendar`, choose `monthly`, `quarterly`, or `yearly`.
+7. For `rsi`, set:
+   - RSI period
+   - lower threshold
+   - upper threshold
+   - RSI signal scope
+8. If RSI signal scope is `single`, choose one of the portfolio tickers as the trigger ticker.
+9. Optionally configure:
+   - fractional shares
+   - auto dividend reinvestment
+   - fee rate
+   - slippage rate
+10. Run the backtest and review the result panels.
 
-## API 사용 예시
+## API
 
-엔드포인트:
+Endpoint:
 
 ```text
 POST /api/backtests
 ```
 
-예시 요청:
+Example request:
 
 ```json
 {
   "positions": [
-    { "ticker": "AAPL", "targetWeight": 40 },
-    { "ticker": "MSFT", "targetWeight": 35 },
-    { "ticker": "QQQ", "targetWeight": 25 }
+    { "ticker": "SCHD", "targetWeight": 50 },
+    { "ticker": "TQQQ", "targetWeight": 50 }
   ],
   "initialCapital": 10000,
   "period": {
     "startDate": "2020-01-01",
-    "endDate": "2024-12-31"
+    "endDate": "2026-04-14"
   },
   "rebalance": {
     "mode": "rsi",
     "rsiPeriod": 14,
     "lower": 30,
-    "upper": 70
+    "upper": 70,
+    "rsiSignalScope": "single",
+    "rsiTriggerTicker": "TQQQ"
   },
   "execution": {
     "fractionalShares": true,
+    "dividendReinvestment": true,
     "feeRate": 0.001,
     "slippageRate": 0.0005
   }
 }
 ```
 
-주요 규칙:
+## Behavior Notes
 
-- 비중 합계는 100이어야 합니다.
-- RSI 신호는 당일 종가로 판정하고, 실제 리밸런싱은 다음 거래일 가격으로 체결합니다.
-- 데이터는 Yahoo Finance 조정종가 기준입니다.
-- 리밸런싱 모드는 한 번의 실행에 하나만 선택합니다.
+- Position weights must add up to `100`.
+- Tickers must be valid Yahoo Finance symbols.
+  - Example: `SCHD` is valid.
+  - Example: `SHCD` is not.
+- RSI signals are evaluated on the signal-day close, and RSI-triggered rebalances execute on the next trading day.
+- Price performance uses Yahoo Finance `Close` data plus explicit dividend cashflows.
+- Dividends are always added to portfolio cash.
+- When `execution.dividendReinvestment=true`, that new dividend cash is reinvested on the same trading day by target weights.
+- When `execution.dividendReinvestment=false`, dividend cash stays in cash until a later rebalance or the end of the backtest.
+- Stock splits are not manually re-applied to holdings on top of Yahoo `Close` prices. This avoids split-day value spikes from double-counting.
+- When `rebalance.rsiSignalScope` is omitted, it defaults to `"all"`.
+- When `rebalance.rsiSignalScope="single"`, `rebalance.rsiTriggerTicker` must match one of the selected portfolio tickers.
+- Even in RSI `single` mode, a trigger rebalances the full portfolio back to target weights.
+- When `execution.dividendReinvestment` is omitted, it defaults to `true`.
 
-## 테스트 실행
+## Tests
+
+Run:
 
 ```bash
 .\.venv\Scripts\python -m pytest
 ```
 
-현재 포함된 테스트:
+Included coverage:
 
-- 요청 검증 테스트
-- 정기 리밸런싱 날짜 규칙 테스트
-- RSI 임계값 돌파 후 다음 거래일 체결 테스트
-- 소수점/정수 주식 차이 테스트
-- 거래 비용 반영 테스트
-- CAGR / MDD 계산 테스트
-- API 응답 구조 테스트
+- request validation
+- calendar rebalance date rules
+- RSI threshold-cross execution timing
+- single-ticker RSI signal scope behavior
+- dividend cash accounting and reinvestment behavior
+- fractional vs integer share behavior
+- trading cost impact
+- split-day regression coverage for TQQQ-style split dates
+- CAGR and MDD calculations
+- API response shape

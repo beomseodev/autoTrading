@@ -29,7 +29,9 @@ class BacktestService:
             {position.ticker: position.targetWeight / 100 for position in request.positions},
             dtype=float,
         )
-        prices = self.data_provider.fetch_adjusted_close(tickers, start_date, end_date)
+        market_data = self.data_provider.fetch_market_data(tickers, start_date, end_date)
+        prices = market_data.prices
+        dividends = market_data.dividends
         if len(prices.index) < 2:
             raise DataProviderError("At least two trading days are required to run a backtest.")
 
@@ -55,7 +57,36 @@ class BacktestService:
 
         equity_curve: list[EquityPoint] = []
         for index_position, timestamp in enumerate(prices.index):
+            current_prices = prices.loc[timestamp]
+
             if index_position > 0:
+                dividend_cash = self._collect_dividend_cash(holdings, dividends.loc[timestamp])
+                cash += dividend_cash
+
+                if dividend_cash > 1e-8 and request.execution.dividendReinvestment:
+                    portfolio_value_before_reinvest = cash + float((holdings * current_prices).sum())
+                    dividend_trade = self._invest_cash_by_weights(
+                        current_holdings=holdings,
+                        cash=cash,
+                        cash_to_invest=dividend_cash,
+                        prices=current_prices,
+                        target_weights=target_weights,
+                        fractional_shares=request.execution.fractionalShares,
+                        fee_rate=request.execution.feeRate,
+                        slippage_rate=request.execution.slippageRate,
+                        portfolio_value=portfolio_value_before_reinvest,
+                    )
+                    holdings = dividend_trade.holdings
+                    cash = dividend_trade.cash
+                    if dividend_trade.turnover_pct > 1e-8:
+                        events.append(
+                            RebalanceEvent(
+                                date=timestamp.date(),
+                                reason="dividend-reinvest",
+                                turnoverPct=round(dividend_trade.turnover_pct, 4),
+                            )
+                        )
+
                 reason = None
                 if request.rebalance.mode == "calendar" and timestamp in calendar_dates:
                     reason = f"calendar:{request.rebalance.frequency}"
@@ -66,7 +97,7 @@ class BacktestService:
                     trade = self._rebalance_to_target(
                         current_holdings=holdings,
                         cash=cash,
-                        prices=prices.loc[timestamp],
+                        prices=current_prices,
                         target_weights=target_weights,
                         fractional_shares=request.execution.fractionalShares,
                         fee_rate=request.execution.feeRate,
@@ -83,13 +114,12 @@ class BacktestService:
                             )
                         )
 
-            portfolio_value = cash + float((holdings * prices.loc[timestamp]).sum())
+            portfolio_value = cash + float((holdings * current_prices).sum())
             equity_curve.append(EquityPoint(date=timestamp.date(), value=round(portfolio_value, 4)))
 
         final_prices = prices.iloc[-1]
         final_value = equity_curve[-1].value
         holdings_value = holdings * final_prices
-        total_holdings_value = float(holdings_value.sum())
 
         holdings_snapshot = [
             HoldingSnapshot(
@@ -149,8 +179,13 @@ class BacktestService:
 
     def _rsi_rebalance_schedule(self, prices: pd.DataFrame, request: BacktestRequest) -> dict[pd.Timestamp, str]:
         schedule: dict[pd.Timestamp, str] = {}
+        signal_tickers = (
+            [request.rebalance.rsiTriggerTicker]
+            if request.rebalance.rsiSignalScope == "single" and request.rebalance.rsiTriggerTicker is not None
+            else list(prices.columns)
+        )
 
-        for ticker in prices.columns:
+        for ticker in signal_tickers:
             rsi = compute_rsi(prices[ticker], period=request.rebalance.rsiPeriod)
             for signal_position in range(1, len(rsi) - 1):
                 previous_value = rsi.iloc[signal_position - 1]
@@ -172,6 +207,54 @@ class BacktestService:
                     schedule[execution_date] = reason
 
         return schedule
+
+    def _collect_dividend_cash(self, holdings: pd.Series, dividend_row: pd.Series) -> float:
+        return float((holdings * dividend_row).sum())
+
+    def _invest_cash_by_weights(
+        self,
+        current_holdings: pd.Series,
+        cash: float,
+        cash_to_invest: float,
+        prices: pd.Series,
+        target_weights: pd.Series,
+        fractional_shares: bool,
+        fee_rate: float,
+        slippage_rate: float,
+        portfolio_value: float,
+    ) -> TradeResult:
+        if cash_to_invest <= 0 or portfolio_value <= 0:
+            return TradeResult(holdings=current_holdings.copy(), cash=cash, turnover_pct=0)
+
+        buy_budget = cash_to_invest * target_weights
+        buy_shares = buy_budget / (prices * (1 + slippage_rate))
+        if not fractional_shares:
+            buy_shares = np.floor(buy_shares + 1e-12)
+
+        buy_cost = buy_shares * prices * (1 + slippage_rate)
+        gross_buy_cost = float(buy_cost.sum())
+        buy_fee = gross_buy_cost * fee_rate
+        total_buy_cost = gross_buy_cost + buy_fee
+
+        if total_buy_cost > cash_to_invest + 1e-8 and gross_buy_cost > 0:
+            scale = max(min(cash_to_invest / total_buy_cost, 1), 0)
+            buy_shares = buy_shares * scale
+            if not fractional_shares:
+                buy_shares = np.floor(buy_shares + 1e-12)
+            buy_cost = buy_shares * prices * (1 + slippage_rate)
+            gross_buy_cost = float(buy_cost.sum())
+            buy_fee = gross_buy_cost * fee_rate
+            total_buy_cost = gross_buy_cost + buy_fee
+
+        holdings_after_trade = current_holdings + buy_shares
+        final_cash = cash - total_buy_cost
+        turnover_pct = (gross_buy_cost / portfolio_value) * 100 if portfolio_value else 0
+
+        return TradeResult(
+            holdings=holdings_after_trade.astype(float),
+            cash=float(max(final_cash, 0)),
+            turnover_pct=float(turnover_pct),
+        )
 
     def _rebalance_to_target(
         self,
@@ -224,4 +307,3 @@ class BacktestService:
             cash=float(max(final_cash, 0)),
             turnover_pct=float(turnover_pct),
         )
-

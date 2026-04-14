@@ -7,14 +7,23 @@ import pytest
 
 from app.schemas import BacktestRequest
 from app.services.backtest import BacktestService
+from app.services.data_provider import MarketData
 
 
 class FakeProvider:
-    def __init__(self, prices: pd.DataFrame) -> None:
+    def __init__(
+        self,
+        prices: pd.DataFrame,
+        dividends: pd.DataFrame | None = None,
+    ) -> None:
         self.prices = prices
+        self.dividends = dividends if dividends is not None else pd.DataFrame(0.0, index=prices.index, columns=prices.columns)
 
-    def fetch_adjusted_close(self, tickers: list[str], start_date: date, end_date: date) -> pd.DataFrame:
-        return self.prices.loc[:, tickers]
+    def fetch_market_data(self, tickers: list[str], start_date: date, end_date: date) -> MarketData:
+        return MarketData(
+            prices=self.prices.loc[:, tickers],
+            dividends=self.dividends.loc[:, tickers],
+        )
 
 
 def make_request(**overrides) -> BacktestRequest:
@@ -26,7 +35,7 @@ def make_request(**overrides) -> BacktestRequest:
         "initialCapital": 1000,
         "period": {"startDate": "2024-01-02", "endDate": "2024-01-10"},
         "rebalance": {"mode": "calendar", "frequency": "monthly"},
-        "execution": {"fractionalShares": True, "feeRate": 0, "slippageRate": 0},
+        "execution": {"fractionalShares": True, "dividendReinvestment": True, "feeRate": 0, "slippageRate": 0},
     }
     payload.update(overrides)
     return BacktestRequest.model_validate(payload)
@@ -82,6 +91,19 @@ def test_period_validation_rejects_mixed_modes() -> None:
         )
 
 
+def test_dividend_reinvestment_defaults_to_true() -> None:
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 100}],
+            "initialCapital": 1000,
+            "period": {"startDate": "2024-01-02", "endDate": "2024-01-04"},
+            "rebalance": {"mode": "calendar", "frequency": "monthly"},
+        }
+    )
+
+    assert request.execution.dividendReinvestment is True
+
+
 def test_positions_with_custom_weights_drive_results() -> None:
     prices = make_prices()
     service = BacktestService(FakeProvider(prices))
@@ -121,7 +143,7 @@ def test_fractional_share_toggle_changes_deployed_capital() -> None:
             "initialCapital": 1000,
             "period": {"startDate": "2024-01-02", "endDate": "2024-01-04"},
             "rebalance": {"mode": "calendar", "frequency": "monthly"},
-            "execution": {"fractionalShares": False, "feeRate": 0, "slippageRate": 0},
+            "execution": {"fractionalShares": False, "dividendReinvestment": True, "feeRate": 0, "slippageRate": 0},
         }
     )
     integer_result = integer_service.run(integer_request)
@@ -135,10 +157,165 @@ def test_trading_costs_reduce_performance() -> None:
     service = BacktestService(FakeProvider(prices))
     no_costs = service.run(make_request())
     with_costs = service.run(
-        make_request(execution={"fractionalShares": True, "feeRate": 0.01, "slippageRate": 0.01})
+        make_request(
+            execution={
+                "fractionalShares": True,
+                "dividendReinvestment": True,
+                "feeRate": 0.01,
+                "slippageRate": 0.01,
+            }
+        )
     )
 
     assert with_costs.summary.finalValue < no_costs.summary.finalValue
+
+
+def test_dividends_accumulate_as_cash_when_auto_reinvest_disabled() -> None:
+    index = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])
+    prices = pd.DataFrame({"AAA": [100, 100, 100], "BBB": [100, 100, 100]}, index=index, dtype=float)
+    dividends = pd.DataFrame({"AAA": [0, 2, 0], "BBB": [0, 0, 0]}, index=index, dtype=float)
+    service = BacktestService(FakeProvider(prices, dividends=dividends))
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 50}, {"ticker": "BBB", "targetWeight": 50}],
+            "initialCapital": 1000,
+            "period": {"startDate": "2024-01-02", "endDate": "2024-01-04"},
+            "rebalance": {"mode": "calendar", "frequency": "monthly"},
+            "execution": {"fractionalShares": True, "dividendReinvestment": False, "feeRate": 0, "slippageRate": 0},
+        }
+    )
+
+    result = service.run(request)
+
+    assert result.summary.finalValue == pytest.approx(1010.0, rel=1e-6)
+    assert result.summary.rebalanceCount == 0
+    assert result.holdingsSnapshot[0].shares == pytest.approx(5.0, rel=1e-6)
+    assert result.holdingsSnapshot[1].shares == pytest.approx(5.0, rel=1e-6)
+
+
+def test_dividends_are_reinvested_by_target_weights_when_enabled() -> None:
+    index = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])
+    prices = pd.DataFrame({"AAA": [100, 100, 100], "BBB": [100, 100, 100]}, index=index, dtype=float)
+    dividends = pd.DataFrame({"AAA": [0, 2, 0], "BBB": [0, 0, 0]}, index=index, dtype=float)
+    service = BacktestService(FakeProvider(prices, dividends=dividends))
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 50}, {"ticker": "BBB", "targetWeight": 50}],
+            "initialCapital": 1000,
+            "period": {"startDate": "2024-01-02", "endDate": "2024-01-04"},
+            "rebalance": {"mode": "calendar", "frequency": "monthly"},
+            "execution": {"fractionalShares": True, "dividendReinvestment": True, "feeRate": 0, "slippageRate": 0},
+        }
+    )
+
+    result = service.run(request)
+
+    assert result.summary.finalValue == pytest.approx(1010.0, rel=1e-6)
+    assert result.summary.rebalanceCount == 1
+    assert result.rebalanceEvents[0].reason == "dividend-reinvest"
+    assert result.holdingsSnapshot[0].shares == pytest.approx(5.05, rel=1e-6)
+    assert result.holdingsSnapshot[1].shares == pytest.approx(5.05, rel=1e-6)
+
+
+def test_dividend_reinvestment_combines_multiple_dividend_sources_once() -> None:
+    index = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])
+    prices = pd.DataFrame({"AAA": [100, 100, 100], "BBB": [100, 100, 100]}, index=index, dtype=float)
+    dividends = pd.DataFrame({"AAA": [0, 1, 0], "BBB": [0, 2, 0]}, index=index, dtype=float)
+    service = BacktestService(FakeProvider(prices, dividends=dividends))
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 60}, {"ticker": "BBB", "targetWeight": 40}],
+            "initialCapital": 1000,
+            "period": {"startDate": "2024-01-02", "endDate": "2024-01-04"},
+            "rebalance": {"mode": "calendar", "frequency": "monthly"},
+            "execution": {"fractionalShares": True, "dividendReinvestment": True, "feeRate": 0, "slippageRate": 0},
+        }
+    )
+
+    result = service.run(request)
+
+    assert result.summary.rebalanceCount == 1
+    assert result.holdingsSnapshot[0].shares == pytest.approx(6.084, rel=1e-6)
+    assert result.holdingsSnapshot[1].shares == pytest.approx(4.056, rel=1e-6)
+
+
+def test_dividend_reinvestment_with_integer_shares_leaves_cash_residual() -> None:
+    index = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])
+    prices = pd.DataFrame({"AAA": [10, 10, 10], "BBB": [50, 50, 50]}, index=index, dtype=float)
+    dividends = pd.DataFrame({"AAA": [0, 0.25, 0], "BBB": [0, 1.25, 0]}, index=index, dtype=float)
+    service = BacktestService(FakeProvider(prices, dividends=dividends))
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 60}, {"ticker": "BBB", "targetWeight": 40}],
+            "initialCapital": 1000,
+            "period": {"startDate": "2024-01-02", "endDate": "2024-01-04"},
+            "rebalance": {"mode": "calendar", "frequency": "monthly"},
+            "execution": {"fractionalShares": False, "dividendReinvestment": True, "feeRate": 0, "slippageRate": 0},
+        }
+    )
+
+    result = service.run(request)
+
+    assert result.summary.finalValue == pytest.approx(1025.0, rel=1e-6)
+    assert result.holdingsSnapshot[0].shares == pytest.approx(61.0, rel=1e-6)
+    assert result.holdingsSnapshot[1].shares == pytest.approx(8.0, rel=1e-6)
+
+
+def test_dividend_reinvestment_respects_trading_costs() -> None:
+    index = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])
+    prices = pd.DataFrame({"AAA": [10, 10, 10]}, index=index, dtype=float)
+    dividends = pd.DataFrame({"AAA": [0, 0.1, 0]}, index=index, dtype=float)
+    service = BacktestService(FakeProvider(prices, dividends=dividends))
+
+    no_costs = service.run(
+        BacktestRequest.model_validate(
+            {
+                "positions": [{"ticker": "AAA", "targetWeight": 100}],
+                "initialCapital": 1000,
+                "period": {"startDate": "2024-01-02", "endDate": "2024-01-04"},
+                "rebalance": {"mode": "calendar", "frequency": "monthly"},
+                "execution": {"fractionalShares": True, "dividendReinvestment": True, "feeRate": 0, "slippageRate": 0},
+            }
+        )
+    )
+    with_costs = service.run(
+        BacktestRequest.model_validate(
+            {
+                "positions": [{"ticker": "AAA", "targetWeight": 100}],
+                "initialCapital": 1000,
+                "period": {"startDate": "2024-01-02", "endDate": "2024-01-04"},
+                "rebalance": {"mode": "calendar", "frequency": "monthly"},
+                "execution": {"fractionalShares": True, "dividendReinvestment": True, "feeRate": 0.1, "slippageRate": 0},
+            }
+        )
+    )
+
+    assert with_costs.holdingsSnapshot[0].shares < no_costs.holdingsSnapshot[0].shares
+    assert with_costs.summary.finalValue < no_costs.summary.finalValue
+
+
+def test_dividend_reinvestment_happens_before_calendar_rebalance_on_same_day() -> None:
+    index = pd.to_datetime(["2024-01-31", "2024-02-01", "2024-02-02"])
+    prices = pd.DataFrame({"AAA": [100, 200, 200], "BBB": [100, 100, 100]}, index=index, dtype=float)
+    dividends = pd.DataFrame({"AAA": [0, 20, 0], "BBB": [0, 0, 0]}, index=index, dtype=float)
+    service = BacktestService(FakeProvider(prices, dividends=dividends))
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 50}, {"ticker": "BBB", "targetWeight": 50}],
+            "initialCapital": 1000,
+            "period": {"startDate": "2024-01-31", "endDate": "2024-02-02"},
+            "rebalance": {"mode": "calendar", "frequency": "monthly"},
+            "execution": {"fractionalShares": True, "dividendReinvestment": True, "feeRate": 0, "slippageRate": 0},
+        }
+    )
+
+    result = service.run(request)
+
+    assert result.summary.rebalanceCount == 2
+    assert result.rebalanceEvents[0].date == date(2024, 2, 1)
+    assert result.rebalanceEvents[0].reason == "dividend-reinvest"
+    assert result.rebalanceEvents[1].date == date(2024, 2, 1)
+    assert result.rebalanceEvents[1].reason == "calendar:monthly"
 
 
 def test_calendar_rebalance_uses_first_trading_day_of_next_period() -> None:
@@ -203,6 +380,201 @@ def test_rsi_rebalance_triggers_only_on_threshold_cross() -> None:
     assert result.summary.rebalanceCount == 1
     assert result.rebalanceEvents[0].date == date(2024, 1, 9)
     assert result.rebalanceEvents[0].reason.startswith("rsi:AAA")
+
+
+def test_rsi_single_scope_requires_trigger_ticker() -> None:
+    with pytest.raises(ValueError, match="rsiTriggerTicker is required"):
+        BacktestRequest.model_validate(
+            {
+                "positions": [{"ticker": "AAA", "targetWeight": 50}, {"ticker": "BBB", "targetWeight": 50}],
+                "initialCapital": 1000,
+                "period": {"startDate": "2024-01-02", "endDate": "2024-01-10"},
+                "rebalance": {
+                    "mode": "rsi",
+                    "rsiPeriod": 2,
+                    "lower": 30,
+                    "upper": 70,
+                    "rsiSignalScope": "single",
+                },
+            }
+        )
+
+
+def test_rsi_single_scope_rejects_unknown_trigger_ticker() -> None:
+    with pytest.raises(ValueError, match="rsiTriggerTicker must match"):
+        BacktestRequest.model_validate(
+            {
+                "positions": [{"ticker": "AAA", "targetWeight": 50}, {"ticker": "BBB", "targetWeight": 50}],
+                "initialCapital": 1000,
+                "period": {"startDate": "2024-01-02", "endDate": "2024-01-10"},
+                "rebalance": {
+                    "mode": "rsi",
+                    "rsiPeriod": 2,
+                    "lower": 30,
+                    "upper": 70,
+                    "rsiSignalScope": "single",
+                    "rsiTriggerTicker": "ZZZ",
+                },
+            }
+        )
+
+
+def test_rsi_single_scope_only_uses_selected_ticker_signal() -> None:
+    index = pd.to_datetime(
+        [
+            "2024-01-02",
+            "2024-01-03",
+            "2024-01-04",
+            "2024-01-05",
+            "2024-01-08",
+            "2024-01-09",
+            "2024-01-10",
+        ]
+    )
+    prices = pd.DataFrame(
+        {
+            "AAA": [100, 100, 100, 100, 100, 100, 100],
+            "BBB": [100, 101, 102, 103, 90, 88, 87],
+        },
+        index=index,
+        dtype=float,
+    )
+    service = BacktestService(FakeProvider(prices))
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 50}, {"ticker": "BBB", "targetWeight": 50}],
+            "initialCapital": 1000,
+            "period": {"startDate": "2024-01-02", "endDate": "2024-01-10"},
+            "rebalance": {
+                "mode": "rsi",
+                "rsiPeriod": 2,
+                "lower": 30,
+                "upper": 70,
+                "rsiSignalScope": "single",
+                "rsiTriggerTicker": " aaa ",
+            },
+        }
+    )
+
+    result = service.run(request)
+
+    assert result.summary.rebalanceCount == 0
+
+
+def test_rsi_single_scope_rebalances_full_portfolio_when_selected_ticker_signals() -> None:
+    index = pd.to_datetime(
+        [
+            "2024-01-02",
+            "2024-01-03",
+            "2024-01-04",
+            "2024-01-05",
+            "2024-01-08",
+            "2024-01-09",
+            "2024-01-10",
+        ]
+    )
+    prices = pd.DataFrame(
+        {
+            "AAA": [100, 101, 102, 103, 90, 88, 87],
+            "BBB": [100, 120, 140, 160, 200, 210, 220],
+        },
+        index=index,
+        dtype=float,
+    )
+    service = BacktestService(FakeProvider(prices))
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 50}, {"ticker": "BBB", "targetWeight": 50}],
+            "initialCapital": 1000,
+            "period": {"startDate": "2024-01-02", "endDate": "2024-01-10"},
+            "rebalance": {
+                "mode": "rsi",
+                "rsiPeriod": 2,
+                "lower": 30,
+                "upper": 70,
+                "rsiSignalScope": "single",
+                "rsiTriggerTicker": "AAA",
+            },
+        }
+    )
+
+    result = service.run(request)
+
+    assert result.summary.rebalanceCount == 1
+    assert result.rebalanceEvents[0].reason.startswith("rsi:AAA")
+    assert result.holdingsSnapshot[0].shares == pytest.approx(8.46590909, rel=1e-6)
+    assert result.holdingsSnapshot[1].shares == pytest.approx(3.54761905, rel=1e-6)
+
+
+def test_split_day_close_prices_do_not_create_artificial_jump() -> None:
+    index = pd.to_datetime(["2021-01-20", "2021-01-21", "2021-01-22"])
+    prices = pd.DataFrame({"TQQQ": [24.745001, 25.360001, 25.129999]}, index=index, dtype=float)
+    service = BacktestService(FakeProvider(prices))
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "TQQQ", "targetWeight": 100}],
+            "initialCapital": 1000,
+            "period": {"startDate": "2021-01-20", "endDate": "2021-01-22"},
+            "rebalance": {"mode": "calendar", "frequency": "yearly"},
+        }
+    )
+
+    result = service.run(request)
+
+    assert result.equityCurve[1].value == pytest.approx(1024.8537, rel=1e-4)
+    assert result.equityCurve[2].value == pytest.approx(1015.5595, rel=1e-4)
+
+
+def test_schd_tqqq_rsi_single_does_not_spike_on_known_tqqq_split_days() -> None:
+    index = pd.to_datetime(
+        [
+            "2021-01-20",
+            "2021-01-21",
+            "2021-01-22",
+            "2022-01-12",
+            "2022-01-13",
+            "2022-01-14",
+            "2025-11-19",
+            "2025-11-20",
+            "2025-11-21",
+        ]
+    )
+    prices = pd.DataFrame(
+        {
+            "SCHD": [22.129999, 22.07, 21.906668, 27.299999, 27.263332, 27.236668, 26.93, 26.620001, 27.10],
+            "TQQQ": [24.745001, 25.360001, 25.129999, 38.169998, 35.400002, 35.935001, 50.025002, 46.450001, 47.48],
+        },
+        index=index,
+        dtype=float,
+    )
+    service = BacktestService(FakeProvider(prices))
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "SCHD", "targetWeight": 50}, {"ticker": "TQQQ", "targetWeight": 50}],
+            "initialCapital": 10000,
+            "period": {"startDate": "2021-01-20", "endDate": "2025-11-21"},
+            "rebalance": {
+                "mode": "rsi",
+                "rsiPeriod": 2,
+                "lower": 30,
+                "upper": 70,
+                "rsiSignalScope": "single",
+                "rsiTriggerTicker": "TQQQ",
+            },
+        }
+    )
+
+    result = service.run(request)
+    equity_by_date = {point.date: point.value for point in result.equityCurve}
+
+    split_day_changes = [
+        equity_by_date[date(2021, 1, 21)] / equity_by_date[date(2021, 1, 20)] - 1,
+        equity_by_date[date(2022, 1, 13)] / equity_by_date[date(2022, 1, 12)] - 1,
+        equity_by_date[date(2025, 11, 20)] / equity_by_date[date(2025, 11, 19)] - 1,
+    ]
+
+    for change in split_day_changes:
+        assert abs(change) < 0.06
 
 
 def test_cagr_and_mdd_match_expected_values() -> None:
