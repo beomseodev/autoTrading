@@ -70,8 +70,8 @@ class RebalanceInput(BaseModel):
         if self.mode == "band":
             if self.bandWidthPct is None:
                 raise ValueError("bandWidthPct is required when mode is band.")
-            if not (0 < self.bandWidthPct <= 50):
-                raise ValueError("bandWidthPct must be between 0 and 50 (exclusive of 0).")
+            if self.bandWidthPct <= 0 or self.bandWidthPct > 50:
+                raise ValueError("bandWidthPct must be greater than 0 and at most 50.")
         return self
 
 

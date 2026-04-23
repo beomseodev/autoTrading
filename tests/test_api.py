@@ -198,6 +198,31 @@ def test_backtest_api_accepts_single_rsi_trigger_ticker() -> None:
     app.dependency_overrides.clear()
 
 
+def test_backtest_api_accepts_band_rebalance() -> None:
+    app.dependency_overrides[get_backtest_service] = lambda: BacktestService(FakeProvider())
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/backtests",
+        json={
+            "positions": [
+                {"ticker": "AAA", "targetWeight": 50},
+                {"ticker": "BBB", "targetWeight": 50},
+            ],
+            "initialCapital": 1000,
+            "period": {"startDate": "2024-01-02", "endDate": "2024-01-04"},
+            "rebalance": {"mode": "band", "bandWidthPct": 5},
+            "execution": {"fractionalShares": True, "feeRate": 0, "slippageRate": 0},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body.keys()) == {"summary", "equityCurve", "realEquityCurve", "holdingsSnapshot", "rebalanceEvents"}
+
+    app.dependency_overrides.clear()
+
+
 def test_backtest_api_accepts_monthly_contribution_and_hides_cagr() -> None:
     app.dependency_overrides[get_backtest_service] = lambda: BacktestService(FakeProvider())
     client = TestClient(app)

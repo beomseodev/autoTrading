@@ -2,6 +2,7 @@
  * US Portfolio Backtester — 프론트 로직
  * 수정: 2026-04-23 — 포트폴리오 비교 모드, 다중 시리즈 차트(교집합 거래일), 비교 요약 표 추가
  * 수정: 2026-04-23 — 실행 모드를 셀렉트 대신 탭 버튼으로 바꿔 비교 기능이 한눈에 보이게 함
+ * 수정: 2026-04-23 — 리밸런스 모드에 밴드(드리프트) 옵션 및 폼 필드 연동
  */
 
 const positionsContainer = document.getElementById("positions");
@@ -21,6 +22,7 @@ const periodRangeFields = document.getElementById("period-range-fields");
 const periodLookbackFields = document.getElementById("period-lookback-fields");
 const rebalanceModeSelect = document.getElementById("rebalance-mode");
 const frequencyField = document.getElementById("frequency-field");
+const bandFields = document.getElementById("band-fields");
 const rsiFields = document.getElementById("rsi-fields");
 const rsiScopeFields = document.getElementById("rsi-scope-fields");
 const rsiSignalScopeSelect = document.getElementById("rsi-signal-scope");
@@ -96,10 +98,14 @@ function toggleRsiScopeFields() {
 }
 
 function toggleRebalanceFields() {
-  const isCalendar = rebalanceModeSelect.value === "calendar";
+  const mode = rebalanceModeSelect.value;
+  const isCalendar = mode === "calendar";
+  const isRsi = mode === "rsi";
+  const isBand = mode === "band";
   frequencyField.classList.toggle("hidden", !isCalendar);
-  rsiFields.classList.toggle("hidden", isCalendar);
-  rsiScopeFields.classList.toggle("hidden", isCalendar);
+  bandFields.classList.toggle("hidden", !isBand);
+  rsiFields.classList.toggle("hidden", !isRsi);
+  rsiScopeFields.classList.toggle("hidden", !isRsi);
   toggleRsiScopeFields();
 }
 
@@ -500,21 +506,22 @@ function buildExecutionFromFormData(formData) {
 }
 
 function buildRebalanceFromMainForm(formData) {
-  const rebalance =
-    rebalanceModeSelect.value === "calendar"
-      ? {
-          mode: "calendar",
-          frequency: formData.get("frequency"),
-        }
-      : {
-          mode: "rsi",
-          rsiPeriod: Number(formData.get("rsiPeriod")),
-          lower: Number(formData.get("lower")),
-          upper: Number(formData.get("upper")),
-          rsiSignalScope: formData.get("rsiSignalScope"),
-        };
+  const mode = rebalanceModeSelect.value;
+  if (mode === "calendar") {
+    return { mode: "calendar", frequency: formData.get("frequency") };
+  }
+  if (mode === "band") {
+    return { mode: "band", bandWidthPct: Number(formData.get("bandWidthPct")) };
+  }
 
-  if (rebalance.mode === "rsi" && rebalance.rsiSignalScope === "single") {
+  const rebalance = {
+    mode: "rsi",
+    rsiPeriod: Number(formData.get("rsiPeriod")),
+    lower: Number(formData.get("lower")),
+    upper: Number(formData.get("upper")),
+    rsiSignalScope: formData.get("rsiSignalScope"),
+  };
+  if (rebalance.rsiSignalScope === "single") {
     rebalance.rsiTriggerTicker = formData.get("rsiTriggerTicker")?.toString().trim().toUpperCase();
   }
   return rebalance;
@@ -575,10 +582,17 @@ function toggleScenarioRsiScope(card) {
 
 function toggleScenarioRebalance(card) {
   const modeSelect = card.querySelector(".scenario-rebalance-mode");
-  const isCalendar = modeSelect.value === "calendar";
+  const mode = modeSelect.value;
+  const isCalendar = mode === "calendar";
+  const isRsi = mode === "rsi";
+  const isBand = mode === "band";
   card.querySelector(".scenario-frequency-field").classList.toggle("hidden", !isCalendar);
-  card.querySelector(".scenario-rsi-fields").classList.toggle("hidden", isCalendar);
-  card.querySelector(".scenario-rsi-scope-fields").classList.toggle("hidden", isCalendar);
+  const bandField = card.querySelector(".scenario-band-field");
+  if (bandField) {
+    bandField.classList.toggle("hidden", !isBand);
+  }
+  card.querySelector(".scenario-rsi-fields").classList.toggle("hidden", !isRsi);
+  card.querySelector(".scenario-rsi-scope-fields").classList.toggle("hidden", !isRsi);
   toggleScenarioRsiScope(card);
 }
 
@@ -602,6 +616,13 @@ function buildRebalanceFromScenarioCard(card) {
     return {
       mode: "calendar",
       frequency: card.querySelector(".scenario-frequency").value,
+    };
+  }
+
+  if (modeSelect.value === "band") {
+    return {
+      mode: "band",
+      bandWidthPct: Number(card.querySelector(".scenario-band-width")?.value),
     };
   }
 
@@ -747,6 +768,13 @@ function addScenarioCard(preset) {
 
   if (preset?.rebalanceMode === "rsi") {
     card.querySelector(".scenario-rebalance-mode").value = "rsi";
+    toggleScenarioRebalance(card);
+  } else if (preset?.rebalanceMode === "band") {
+    card.querySelector(".scenario-rebalance-mode").value = "band";
+    const bw = card.querySelector(".scenario-band-width");
+    if (bw && preset.bandWidthPct != null) {
+      bw.value = String(preset.bandWidthPct);
+    }
     toggleScenarioRebalance(card);
   } else {
     toggleScenarioRebalance(card);

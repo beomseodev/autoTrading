@@ -276,6 +276,29 @@ class BacktestService:
         first_days = pd.Series(trading_index, index=trading_index).groupby(trading_index.to_period("M")).first()
         return set(first_days.iloc[1:].tolist())
 
+    def _band_rebalance_reason(
+        self,
+        holdings: pd.Series,
+        cash: float,
+        prices: pd.Series,
+        target_weights: pd.Series,
+        band_width_pct: float,
+    ) -> str | None:
+        """드리프트 밴드: 실제 비중과 목표 비중의 최대 절대 편차가 허용폭(%p)을 넘으면 리밸런스 사유 문자열 반환.
+
+        수정: 2026-04-23 — band 모드용. band_width_pct는 비중 절대편차 허용폭(예: 5 → ±5%p).
+        """
+        portfolio_value = cash + float((holdings * prices).sum())
+        if portfolio_value <= 1e-12:
+            return None
+        market_values = holdings * prices
+        actual_weights = market_values / portfolio_value
+        max_abs_drift = float((actual_weights - target_weights).abs().max())
+        threshold = band_width_pct / 100.0
+        if max_abs_drift > threshold + 1e-12:
+            return f"band:{band_width_pct}"
+        return None
+
     def _compute_xirr(self, cash_flows: list[tuple[date, float]]) -> float | None:
         if len(cash_flows) < 2:
             return None

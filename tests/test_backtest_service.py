@@ -608,6 +608,78 @@ def test_rsi_rebalance_triggers_only_on_threshold_cross() -> None:
     assert result.rebalanceEvents[0].reason.startswith("rsi:AAA")
 
 
+def test_band_mode_requires_band_width_pct() -> None:
+    with pytest.raises(ValueError, match="bandWidthPct is required"):
+        BacktestRequest.model_validate(
+            {
+                "positions": [{"ticker": "AAA", "targetWeight": 50}, {"ticker": "BBB", "targetWeight": 50}],
+                "initialCapital": 1000,
+                "period": {"startDate": "2024-01-02", "endDate": "2024-01-10"},
+                "rebalance": {"mode": "band"},
+            }
+        )
+
+
+@pytest.mark.parametrize("band_width", [0, -1, 51])
+def test_band_mode_rejects_invalid_band_width(band_width: float) -> None:
+    with pytest.raises(ValueError, match="bandWidthPct must be greater than 0"):
+        BacktestRequest.model_validate(
+            {
+                "positions": [{"ticker": "AAA", "targetWeight": 50}, {"ticker": "BBB", "targetWeight": 50}],
+                "initialCapital": 1000,
+                "period": {"startDate": "2024-01-02", "endDate": "2024-01-10"},
+                "rebalance": {"mode": "band", "bandWidthPct": band_width},
+            }
+        )
+
+
+def test_band_rebalance_triggers_when_drift_exceeds_band() -> None:
+    index = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])
+    prices = pd.DataFrame(
+        {"AAA": [100.0, 200.0, 200.0], "BBB": [100.0, 100.0, 100.0]},
+        index=index,
+        dtype=float,
+    )
+    service = BacktestService(FakeProvider(prices))
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 50}, {"ticker": "BBB", "targetWeight": 50}],
+            "initialCapital": 1000,
+            "period": {"startDate": "2024-01-02", "endDate": "2024-01-04"},
+            "rebalance": {"mode": "band", "bandWidthPct": 5},
+            "execution": {"dividendReinvestment": False},
+        }
+    )
+
+    result = service.run(request)
+
+    band_events = [e for e in result.rebalanceEvents if e.reason.startswith("band:")]
+    assert len(band_events) == 1
+    assert band_events[0].date == date(2024, 1, 3)
+
+
+def test_band_rebalance_skips_when_within_band() -> None:
+    index = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])
+    prices = pd.DataFrame(
+        {"AAA": [100.0, 100.0, 100.0], "BBB": [100.0, 100.0, 100.0]},
+        index=index,
+        dtype=float,
+    )
+    service = BacktestService(FakeProvider(prices))
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 50}, {"ticker": "BBB", "targetWeight": 50}],
+            "initialCapital": 1000,
+            "period": {"startDate": "2024-01-02", "endDate": "2024-01-04"},
+            "rebalance": {"mode": "band", "bandWidthPct": 5},
+            "execution": {"dividendReinvestment": False},
+        }
+    )
+
+    result = service.run(request)
+    assert not any(e.reason.startswith("band:") for e in result.rebalanceEvents)
+
+
 def test_rsi_single_scope_requires_trigger_ticker() -> None:
     with pytest.raises(ValueError, match="rsiTriggerTicker is required"):
         BacktestRequest.model_validate(
