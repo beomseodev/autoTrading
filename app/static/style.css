@@ -77,6 +77,131 @@ body {
   gap: 16px;
 }
 
+.panel-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.run-mode-hint {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.5;
+  max-width: 640px;
+}
+
+.run-mode-toggle {
+  margin-top: 14px;
+  display: inline-flex;
+  flex-wrap: wrap;
+  padding: 5px;
+  border-radius: 999px;
+  background: rgba(29, 36, 51, 0.08);
+  gap: 6px;
+  max-width: 100%;
+}
+
+.run-mode-btn {
+  padding: 12px 20px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 0.95rem;
+  border: none;
+  cursor: pointer;
+  transition: transform 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.run-mode-btn:hover {
+  color: var(--ink);
+}
+
+.run-mode-btn.active {
+  background: white;
+  color: var(--accent-dark);
+  box-shadow: 0 6px 18px rgba(29, 36, 51, 0.1);
+}
+
+.compare-intro {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 0.95rem;
+  line-height: 1.55;
+}
+
+.scenarios-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.scenario-card {
+  padding: 18px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(29, 36, 51, 0.1);
+}
+
+.scenario-card-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.scenario-label-field {
+  flex: 1 1 220px;
+}
+
+.compare-summary-wrap {
+  margin-top: 22px;
+}
+
+.compare-summary-title {
+  margin: 0 0 12px;
+  font-size: 1.1rem;
+}
+
+.compare-summary-table th[scope="row"] {
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  margin-top: 12px;
+}
+
+.chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.chart-legend-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.scenario-detail-label {
+  display: grid;
+  gap: 8px;
+  min-width: 200px;
+  margin: 0;
+}
+
 .panel-header h2,
 .chart-header h3,
 .table-card h3 {

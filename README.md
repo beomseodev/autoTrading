@@ -56,15 +56,50 @@ tests/
 
 ## Setup
 
-### 1. Create a virtual environment
+### Windows (PowerShell) — 권장 스크립트
+
+저장소 루트에서 한 번만 실행합니다. Python 3.13+ 와 (선택) `py` 런처가 PATH에 있어야 합니다.
+
+```powershell
+.\scripts\setup.ps1
+```
+
+실행 정책 오류가 나면:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+가상환경 활성화(수동으로 할 때):
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+### WSL (Ubuntu 등)
+
+저장소를 `/mnt/c/...` 또는 WSL 홈에 둔 뒤, WSL 터미널에서:
+
+```bash
+chmod +x scripts/*.sh
+./scripts/setup_wsl.sh
+# /mnt/c 등에서 실행 비트가 안 붙으면: bash ./scripts/setup_wsl.sh
+source .venv/bin/activate
+```
+
+`python3` 와 `python3-venv` 가 없으면:
+
+```bash
+sudo apt update && sudo apt install -y python3 python3-venv python3-pip
+```
+
+### 수동 셋업 (공통)
 
 ```bash
 python -m venv .venv
 ```
 
-### 2. Activate it
-
-PowerShell:
+PowerShell에서 활성화:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
@@ -76,13 +111,27 @@ CMD:
 .venv\Scripts\activate.bat
 ```
 
-### 3. Install dependencies
+의존성 설치:
 
 ```bash
 pip install -e .[dev]
 ```
 
 ## Run the Server
+
+PowerShell:
+
+```powershell
+.\scripts\run.ps1
+```
+
+WSL:
+
+```bash
+./scripts/run_wsl.sh
+```
+
+또는 가상환경을 켠 뒤:
 
 ```bash
 uvicorn app.main:app --reload
@@ -182,7 +231,19 @@ Example request:
 
 ## Tests
 
-Run:
+PowerShell:
+
+```powershell
+.\scripts\test.ps1
+```
+
+WSL:
+
+```bash
+./scripts/test_wsl.sh
+```
+
+또는:
 
 ```bash
 .\.venv\Scripts\python -m pytest

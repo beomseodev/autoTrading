@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app, get_backtest_service
 from app.services.backtest import BacktestService
-from app.services.data_provider import MarketData
+from app.services.data_provider import DataProviderError, MarketData
 
 
 class FakeProvider:
@@ -23,6 +23,111 @@ class FakeProvider:
         ).loc[:, tickers]
         dividends = pd.DataFrame(0.0, index=index, columns=tickers, dtype=float)
         return MarketData(prices=prices, dividends=dividends)
+
+
+class FailingProvider:
+    """수정: 2026-04-23 — 비교 API에서 DataProviderError 시 라벨 전달 검증용."""
+
+    def fetch_market_data(self, tickers: list[str], start_date: date, end_date: date) -> MarketData:
+        raise DataProviderError("simulated provider failure")
+
+
+def _minimal_backtest_json() -> dict:
+    return {
+        "positions": [
+            {"ticker": "AAA", "targetWeight": 50},
+            {"ticker": "BBB", "targetWeight": 50},
+        ],
+        "initialCapital": 1000,
+        "period": {"startDate": "2024-01-02", "endDate": "2024-01-04"},
+        "rebalance": {"mode": "calendar", "frequency": "monthly"},
+        "execution": {"fractionalShares": True, "feeRate": 0, "slippageRate": 0},
+    }
+
+
+def test_compare_backtests_returns_expected_shape() -> None:
+    app.dependency_overrides[get_backtest_service] = lambda: BacktestService(FakeProvider())
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/backtests/compare",
+        json={
+            "runs": [
+                {"label": "All AAA", "request": {**_minimal_backtest_json(), "positions": [{"ticker": "AAA", "targetWeight": 100}]}},
+                {"label": "50/50", "request": _minimal_backtest_json()},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body.keys()) == {"runs"}
+    assert len(body["runs"]) == 2
+    assert body["runs"][0]["label"] == "All AAA"
+    assert body["runs"][1]["label"] == "50/50"
+    for item in body["runs"]:
+        assert set(item["result"].keys()) == {
+            "summary",
+            "equityCurve",
+            "realEquityCurve",
+            "holdingsSnapshot",
+            "rebalanceEvents",
+        }
+
+    app.dependency_overrides.clear()
+
+
+def test_compare_backtests_rejects_single_run() -> None:
+    app.dependency_overrides[get_backtest_service] = lambda: BacktestService(FakeProvider())
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/backtests/compare",
+        json={"runs": [{"label": "Only one", "request": _minimal_backtest_json()}]},
+    )
+
+    assert response.status_code == 422
+
+    app.dependency_overrides.clear()
+
+
+def test_compare_backtests_rejects_duplicate_labels() -> None:
+    app.dependency_overrides[get_backtest_service] = lambda: BacktestService(FakeProvider())
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/backtests/compare",
+        json={
+            "runs": [
+                {"label": "Same", "request": _minimal_backtest_json()},
+                {"label": "Same", "request": _minimal_backtest_json()},
+            ],
+        },
+    )
+
+    assert response.status_code == 422
+
+    app.dependency_overrides.clear()
+
+
+def test_compare_backtests_provider_error_includes_label() -> None:
+    app.dependency_overrides[get_backtest_service] = lambda: BacktestService(FailingProvider())
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/backtests/compare",
+        json={
+            "runs": [
+                {"label": "First scenario", "request": _minimal_backtest_json()},
+                {"label": "Second scenario", "request": _minimal_backtest_json()},
+            ],
+        },
+    )
+
+    assert response.status_code == 400
+    assert "[First scenario]" in response.json()["detail"]
+
+    app.dependency_overrides.clear()
 
 
 def test_backtest_api_returns_expected_shape() -> None:

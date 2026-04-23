@@ -141,3 +141,44 @@ class BacktestResponse(BaseModel):
     realEquityCurve: list[EquityPoint]
     holdingsSnapshot: list[HoldingSnapshot]
     rebalanceEvents: list[RebalanceEvent]
+
+
+# 수정: 2026-04-23 — 다중 포트폴리오 비교 API용 요청/응답 모델 추가
+class LabeledBacktestRun(BaseModel):
+    """단일 백테스트 설정 + UI/응답 매핑용 라벨."""
+
+    label: str = Field(min_length=1, max_length=64)
+    request: BacktestRequest
+
+    @model_validator(mode="after")
+    def normalize_label(self) -> "LabeledBacktestRun":
+        self.label = self.label.strip()
+        if not self.label:
+            raise ValueError("label cannot be empty.")
+        return self
+
+
+class CompareBacktestsRequest(BaseModel):
+    """2개 이상의 시나리오를 한 번에 백테스트(순차 실행)."""
+
+    runs: list[LabeledBacktestRun] = Field(min_length=2, max_length=8)
+
+    @model_validator(mode="after")
+    def validate_unique_labels(self) -> "CompareBacktestsRequest":
+        labels = [run.label for run in self.runs]
+        if len(labels) != len(set(labels)):
+            raise ValueError("Duplicate scenario labels are not allowed.")
+        return self
+
+
+class LabeledBacktestResult(BaseModel):
+    """비교 응답의 한 행: 라벨 + 단일 백테스트 결과."""
+
+    label: str
+    result: BacktestResponse
+
+
+class CompareBacktestsResponse(BaseModel):
+    """비교 API 응답: 시나리오별 결과 배열."""
+
+    runs: list[LabeledBacktestResult]

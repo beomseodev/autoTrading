@@ -12,8 +12,10 @@
       <p class="eyebrow">US STOCKS BACKTESTER</p>
       <h1>US Portfolio Backtester</h1>
       <p class="hero-copy">
-        Configure target weights, a backtest window, rebalance rules, and optional monthly
-        contributions to review final value, CAGR/XIRR, MDD, the equity curve, and executed rebalance events.
+        미국 주식·ETF 포트폴리오를 백테스트합니다.
+        <strong>단일 조합</strong>으로 돌리거나, 아래 설정에서
+        <strong>여러 포트폴리오 비교</strong>를 켜면 최대 8개 시나리오를 같은 기간·자본 조건으로 한 번에 비교할 수 있습니다
+        (요약 표·다중 자산 곡선·시나리오별 홀딩/리밸런스 이벤트).
       </p>
     </section>
 
@@ -21,49 +23,30 @@
       <div class="panel-header">
         <div>
           <h2>Backtest Setup</h2>
-          <p>Target weights must add up to 100%.</p>
+          <p id="setup-hint">Target weights must add up to 100%.</p>
+          <p class="run-mode-hint" id="run-mode-hint">
+            먼저 모드를 고르세요. 비교 모드에서는 카드마다 다른 티커·비중·리밸런스를 넣을 수 있습니다.
+          </p>
+          <div class="run-mode-toggle" role="tablist" aria-label="백테스트 실행 모드">
+            <button type="button" class="run-mode-btn active" data-run-mode="single" id="run-mode-single" role="tab" aria-selected="true">
+              단일 포트폴리오
+            </button>
+            <button type="button" class="run-mode-btn" data-run-mode="compare" id="run-mode-compare" role="tab" aria-selected="false">
+              여러 포트폴리오 비교
+            </button>
+          </div>
         </div>
-        <button id="add-position-btn" type="button" class="secondary-btn">Add Ticker</button>
+        <div class="panel-header-actions">
+          <button id="add-position-btn" type="button" class="secondary-btn single-only">Add Ticker</button>
+          <button id="add-scenario-btn" type="button" class="secondary-btn compare-only hidden">
+            시나리오 추가
+          </button>
+        </div>
       </div>
 
       <form id="backtest-form">
-        <div id="positions" class="positions"></div>
-
-        <div class="grid three">
-          <label>
-            <span>Initial capital (USD)</span>
-            <input type="number" name="initialCapital" value="10000" min="1" step="0.01" required />
-          </label>
-          <label>
-            <span>Monthly contribution (USD)</span>
-            <input type="number" name="monthlyContribution" value="0" min="0" step="0.01" />
-          </label>
-          <label>
-            <span>Period input mode</span>
-            <select id="period-mode" name="periodMode">
-              <option value="range">Start / End Date</option>
-              <option value="lookback">Trailing N Years</option>
-            </select>
-          </label>
-        </div>
-
-        <div id="period-range-fields" class="grid two">
-          <label>
-            <span>Start date</span>
-            <input type="date" name="startDate" value="2020-01-01" required />
-          </label>
-          <label>
-            <span>End date</span>
-            <input type="date" name="endDate" value="2024-12-31" required />
-          </label>
-        </div>
-
-        <div id="period-lookback-fields" class="grid one hidden">
-          <label>
-            <span>Trailing years</span>
-            <input type="number" name="lookbackYears" value="5" min="0.25" max="50" step="0.25" />
-          </label>
-        </div>
+        <div id="single-setup" class="single-only">
+          <div id="positions" class="positions"></div>
 
         <div class="grid two">
           <label>
@@ -111,8 +94,52 @@
             <select id="rsi-trigger-ticker" name="rsiTriggerTicker"></select>
           </label>
         </div>
+        </div>
 
-        <div class="grid two">
+        <div id="compare-setup" class="compare-only hidden">
+          <p class="compare-intro">
+            기간·초기자금·월납입·실행 옵션은 아래 공통 입력을 사용합니다. 각 시나리오 카드에서 포지션과 리밸런스만 다르게 설정하세요. 차트는 모든 시리즈에 값이 있는 거래일(교집합)만 표시합니다.
+          </p>
+          <div id="scenarios-container" class="scenarios-stack" aria-live="polite"></div>
+        </div>
+
+        <div class="grid three">
+          <label>
+            <span>Initial capital (USD)</span>
+            <input type="number" name="initialCapital" value="10000" min="1" step="0.01" required />
+          </label>
+          <label>
+            <span>Monthly contribution (USD)</span>
+            <input type="number" name="monthlyContribution" value="0" min="0" step="0.01" />
+          </label>
+          <label>
+            <span>Period input mode</span>
+            <select id="period-mode" name="periodMode">
+              <option value="range">Start / End Date</option>
+              <option value="lookback">Trailing N Years</option>
+            </select>
+          </label>
+        </div>
+
+        <div id="period-range-fields" class="grid two">
+          <label>
+            <span>Start date</span>
+            <input type="date" name="startDate" value="2020-01-01" required />
+          </label>
+          <label>
+            <span>End date</span>
+            <input type="date" name="endDate" value="2024-12-31" required />
+          </label>
+        </div>
+
+        <div id="period-lookback-fields" class="grid one hidden">
+          <label>
+            <span>Trailing years</span>
+            <input type="number" name="lookbackYears" value="5" min="0.25" max="50" step="0.25" />
+          </label>
+        </div>
+
+        <div class="grid three">
           <label class="checkbox-field">
             <span>Allow fractional shares</span>
             <input type="checkbox" name="fractionalShares" checked />
@@ -142,12 +169,26 @@
       <div class="panel-header">
         <div>
           <h2>Results</h2>
-          <p>Review summary metrics, the equity curve, and the executed rebalance events.</p>
+          <p id="results-hint">Review summary metrics, the equity curve, and the executed rebalance events.</p>
         </div>
+        <label id="scenario-detail-label" class="scenario-detail-label hidden">
+          <span>상세 보기 시나리오</span>
+          <select id="scenario-detail-select" aria-label="비교 시나리오 선택"></select>
+        </label>
       </div>
 
       <div id="summary-grid" class="summary-grid empty-state">
         Run a backtest to populate the result cards.
+      </div>
+
+      <div id="compare-summary-wrap" class="compare-summary-wrap hidden">
+        <h3 class="compare-summary-title">시나리오 요약 비교</h3>
+        <div class="table-wrap">
+          <table id="compare-summary-table" class="compare-summary-table">
+            <thead id="compare-summary-head"></thead>
+            <tbody id="compare-summary-body"></tbody>
+          </table>
+        </div>
       </div>
 
       <div class="chart-card">
@@ -162,6 +203,7 @@
           </div>
         </div>
         <p id="chart-note" class="chart-note">Nominal portfolio value.</p>
+        <div id="chart-legend" class="chart-legend hidden" aria-hidden="true"></div>
         <canvas id="equity-chart" width="960" height="360"></canvas>
       </div>
 
@@ -217,6 +259,65 @@
         <input type="number" name="targetWeight" min="0.01" max="100" step="0.01" required />
       </label>
       <button type="button" class="danger-btn remove-position-btn">Remove</button>
+    </div>
+  </template>
+
+  <!-- 수정: 2026-04-23 — 비교 모드용 시나리오 카드(포지션 + 리밸런스) 템플릿 -->
+  <template id="scenario-card-template">
+    <div class="scenario-card">
+      <div class="scenario-card-head">
+        <label class="scenario-label-field">
+          <span>시나리오 이름</span>
+          <input type="text" class="scenario-label-input" maxlength="64" required placeholder="예: 60/40" />
+        </label>
+        <button type="button" class="danger-btn remove-scenario-btn">시나리오 삭제</button>
+      </div>
+      <div class="scenario-positions positions"></div>
+      <button type="button" class="secondary-btn add-scenario-position-btn">티커 추가</button>
+      <div class="grid two scenario-rebalance-row">
+        <label>
+          <span>Rebalance mode</span>
+          <select class="scenario-rebalance-mode">
+            <option value="calendar">Calendar Rebalance</option>
+            <option value="rsi">RSI Rebalance</option>
+          </select>
+        </label>
+        <label class="scenario-frequency-field">
+          <span>Calendar frequency</span>
+          <select class="scenario-frequency">
+            <option value="monthly">Monthly</option>
+            <option value="quarterly">Quarterly</option>
+            <option value="yearly">Yearly</option>
+          </select>
+        </label>
+      </div>
+      <div class="grid three scenario-rsi-fields hidden">
+        <label>
+          <span>RSI period</span>
+          <input type="number" class="scenario-rsi-period" value="14" min="2" max="200" />
+        </label>
+        <label>
+          <span>Lower threshold</span>
+          <input type="number" class="scenario-rsi-lower" value="30" min="1" max="99" step="0.1" />
+        </label>
+        <label>
+          <span>Upper threshold</span>
+          <input type="number" class="scenario-rsi-upper" value="70" min="1" max="99" step="0.1" />
+        </label>
+      </div>
+      <div class="grid two scenario-rsi-scope-fields hidden">
+        <label>
+          <span>RSI signal scope</span>
+          <select class="scenario-rsi-signal-scope">
+            <option value="all">All portfolio tickers</option>
+            <option value="single">Selected ticker only</option>
+          </select>
+        </label>
+        <label class="scenario-rsi-trigger-field hidden">
+          <span>RSI trigger ticker</span>
+          <select class="scenario-rsi-trigger-ticker"></select>
+        </label>
+      </div>
     </div>
   </template>
 

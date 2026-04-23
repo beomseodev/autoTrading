@@ -6,7 +6,13 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.schemas import BacktestRequest, BacktestResponse
+from app.schemas import (
+    BacktestRequest,
+    BacktestResponse,
+    CompareBacktestsRequest,
+    CompareBacktestsResponse,
+    LabeledBacktestResult,
+)
 from app.services.backtest import BacktestService
 from app.services.data_provider import DataProviderError
 
@@ -36,4 +42,23 @@ def create_backtest(
         return service.run(payload)
     except DataProviderError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# 수정: 2026-04-23 — 다중 시나리오 순차 백테스트 비교 엔드포인트 추가
+@app.post("/api/backtests/compare", response_model=CompareBacktestsResponse)
+def compare_backtests(
+    payload: CompareBacktestsRequest,
+    service: BacktestService = Depends(get_backtest_service),
+) -> CompareBacktestsResponse:
+    results: list[LabeledBacktestResult] = []
+    for run in payload.runs:
+        try:
+            result = service.run(run.request)
+        except DataProviderError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"[{run.label}] {exc}",
+            ) from exc
+        results.append(LabeledBacktestResult(label=run.label, result=result))
+    return CompareBacktestsResponse(runs=results)
 
