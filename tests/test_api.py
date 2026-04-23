@@ -154,6 +154,7 @@ def test_backtest_api_returns_expected_shape() -> None:
     assert body["summary"]["initialCapital"] == 1000
     assert body["summary"]["monthlyContribution"] == 0
     assert body["summary"]["totalContributed"] == 1000
+    assert body["summary"]["totalExpensePaid"] == 0
     assert body["summary"]["inflationRatePct"] == 3
     assert "realFinalValue" in body["summary"]
     assert "realTotalReturnPct" in body["summary"]

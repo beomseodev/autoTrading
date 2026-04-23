@@ -260,7 +260,7 @@ form {
 }
 
 .position-row {
-  grid-template-columns: 1.3fr 1fr auto;
+  grid-template-columns: 1.1fr 0.85fr 1fr auto;
   align-items: end;
 }
 

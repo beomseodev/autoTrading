@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field, model_validator
 class PositionInput(BaseModel):
     ticker: str = Field(min_length=1, max_length=10)
     targetWeight: float = Field(gt=0, le=100)
+    # 수정: 2026-04-24 — ETF 연 운영보수율(TER). 소수: 0.0003 = 연 0.03%. 0이면 미적용.
+    annualExpenseRatio: float = Field(default=0, ge=0, le=0.05)
 
     @model_validator(mode="after")
     def normalize_ticker(self) -> "PositionInput":
@@ -41,13 +43,15 @@ class PeriodInput(BaseModel):
 
 
 class RebalanceInput(BaseModel):
-    mode: Literal["calendar", "rsi"]
+    mode: Literal["calendar", "rsi", "band"]
     frequency: Literal["monthly", "quarterly", "yearly"] | None = None
     rsiPeriod: int = Field(default=14, ge=2, le=200)
     lower: float = Field(default=30, gt=0, lt=100)
     upper: float = Field(default=70, gt=0, lt=100)
     rsiSignalScope: Literal["all", "single"] = "all"
     rsiTriggerTicker: str | None = None
+    # 수정: 2026-04-23 — 드리프트 밴드 리밸런스: 목표 비중 대비 실제 비중 절대 편차 허용폭(%p). mode=band일 때만 필수.
+    bandWidthPct: float | None = None
 
     @model_validator(mode="after")
     def normalize_rsi_trigger_ticker(self) -> "RebalanceInput":
@@ -63,12 +67,19 @@ class RebalanceInput(BaseModel):
             raise ValueError("lower must be smaller than upper.")
         if self.mode == "rsi" and self.rsiSignalScope == "single" and self.rsiTriggerTicker is None:
             raise ValueError("rsiTriggerTicker is required when rsiSignalScope is single.")
+        if self.mode == "band":
+            if self.bandWidthPct is None:
+                raise ValueError("bandWidthPct is required when mode is band.")
+            if not (0 < self.bandWidthPct <= 50):
+                raise ValueError("bandWidthPct must be between 0 and 50 (exclusive of 0).")
         return self
 
 
 class ExecutionInput(BaseModel):
     fractionalShares: bool = True
     dividendReinvestment: bool = True
+    # 수정: 2026-04-23 — 배당 총액 대비 원천징수·배당소득세 등(예: 국내 15.4% → 0.154). 0이면 세금 없음.
+    dividendTaxRate: float = Field(default=0, ge=0, le=1)
     feeRate: float = Field(default=0, ge=0, le=1)
     slippageRate: float = Field(default=0, ge=0, le=1)
 
@@ -115,6 +126,8 @@ class SummaryOutput(BaseModel):
     xirrPct: float | None
     mddPct: float
     rebalanceCount: int
+    # 수정: 2026-04-24 — 일일 TER 차감 누적(의도 일일 보수 합; 거래일×연율/252 모델)
+    totalExpensePaid: float
 
 
 class EquityPoint(BaseModel):

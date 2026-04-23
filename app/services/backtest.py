@@ -20,6 +20,8 @@ class TradeResult:
 
 class BacktestService:
     INFLATION_RATE = 0.03
+    # 수정: 2026-04-24 — 연 TER를 거래일당 선형 분할(업계 관행 252 거래일/년)
+    TRADING_DAYS_PER_YEAR = 252
 
     def __init__(self, data_provider: YFinanceDataProvider | None = None) -> None:
         self.data_provider = data_provider or YFinanceDataProvider()
@@ -31,6 +33,11 @@ class BacktestService:
             {position.ticker: position.targetWeight / 100 for position in request.positions},
             dtype=float,
         )
+        # 수정: 2026-04-24 — 티커별 연 운영보수율(TER), 일일 차감에 사용
+        expense_ratios = pd.Series(
+            {position.ticker: float(position.annualExpenseRatio) for position in request.positions},
+            dtype=float,
+        ).reindex(tickers, fill_value=0.0)
         market_data = self.data_provider.fetch_market_data(tickers, start_date, end_date)
         prices = market_data.prices
         dividends = market_data.dividends
@@ -55,18 +62,27 @@ class BacktestService:
         holdings = initial_trade.holdings
         cash = initial_trade.cash
 
-        calendar_dates = self._calendar_rebalance_dates(prices.index, request.rebalance.frequency)
+        # 수정: 2026-04-23 — 캘린더 리밸런스일만 계산(band/rsi 모드에서는 불필요)
+        calendar_dates = (
+            self._calendar_rebalance_dates(prices.index, request.rebalance.frequency)
+            if request.rebalance.mode == "calendar"
+            else set()
+        )
         contribution_dates = self._monthly_contribution_dates(prices.index, request.monthlyContribution)
         rsi_schedule = self._rsi_rebalance_schedule(prices, request) if request.rebalance.mode == "rsi" else {}
 
         base_date = prices.index[0].date()
         equity_curve: list[EquityPoint] = []
         real_equity_curve: list[EquityPoint] = []
+        total_expense_paid = 0.0
         for index_position, timestamp in enumerate(prices.index):
             current_prices = prices.loc[timestamp]
 
             if index_position > 0:
-                dividend_cash = self._collect_dividend_cash(holdings, dividends.loc[timestamp])
+                # 수정: 2026-04-23 — 야후 배당은 총액 기준; dividendTaxRate 만큼 차감한 순액만 현금·재투자에 반영
+                gross_dividend_cash = self._collect_dividend_cash(holdings, dividends.loc[timestamp])
+                tax_rate = float(request.execution.dividendTaxRate)
+                dividend_cash = gross_dividend_cash * (1.0 - tax_rate)
                 cash += dividend_cash
 
                 if dividend_cash > 1e-8 and request.execution.dividendReinvestment:
@@ -125,6 +141,15 @@ class BacktestService:
                     reason = f"calendar:{request.rebalance.frequency}"
                 elif request.rebalance.mode == "rsi" and timestamp in rsi_schedule:
                     reason = rsi_schedule[timestamp]
+                elif request.rebalance.mode == "band":
+                    # 수정: 2026-04-23 — 매일 종가 기준 비중 드리프트가 밴드 폭(%p)을 넘으면 목표로 리밸런스
+                    reason = self._band_rebalance_reason(
+                        holdings=holdings,
+                        cash=cash,
+                        prices=current_prices,
+                        target_weights=target_weights,
+                        band_width_pct=float(request.rebalance.bandWidthPct),
+                    )
 
                 if reason is not None:
                     trade = self._rebalance_to_target(
@@ -146,6 +171,11 @@ class BacktestService:
                                 turnoverPct=round(trade.turnover_pct, 4),
                             )
                         )
+
+            # 수정: 2026-04-24 — 일일 TER: 현금에서 차감, 부족 시 종가 기준 보유 시가총액 비례 매도(매매 수수료 미부과)
+            daily_ter = self._compute_daily_ter_amount(holdings, current_prices, expense_ratios)
+            total_expense_paid += daily_ter
+            holdings, cash = self._apply_daily_ter_to_portfolio(holdings, cash, current_prices, daily_ter)
 
             portfolio_value = cash + float((holdings * current_prices).sum())
             equity_curve.append(EquityPoint(date=timestamp.date(), value=round(portfolio_value, 4)))
@@ -206,6 +236,7 @@ class BacktestService:
                 xirrPct=round(xirr_pct, 4) if xirr_pct is not None else None,
                 mddPct=round(mdd_pct, 4),
                 rebalanceCount=len(events),
+                totalExpensePaid=round(total_expense_paid, 4),
             ),
             equityCurve=equity_curve,
             realEquityCurve=real_equity_curve,
@@ -356,6 +387,33 @@ class BacktestService:
                     schedule[execution_date] = reason
 
         return schedule
+
+    def _compute_daily_ter_amount(self, holdings: pd.Series, prices: pd.Series, expense_ratios: pd.Series) -> float:
+        """티커별 시가총액에 연 TER를 곱한 뒤 252로 나눈 일일 보수액."""
+        position_mv = holdings.astype(float) * prices.astype(float)
+        return float((position_mv * expense_ratios.astype(float)).sum() / float(self.TRADING_DAYS_PER_YEAR))
+
+    def _apply_daily_ter_to_portfolio(
+        self,
+        holdings: pd.Series,
+        cash: float,
+        prices: pd.Series,
+        expense: float,
+    ) -> tuple[pd.Series, float]:
+        """일일 보수를 현금에서 징수. 현금이 부족하면 보유 전체를 종가 비율로 축소 매도해 충당(수수료 없음)."""
+        if expense <= 1e-12:
+            return holdings, cash
+        cash = float(cash - expense)
+        if cash >= -1e-9:
+            return holdings.astype(float), float(max(cash, 0.0))
+        deficit = float(-cash)
+        total_mv = float((holdings.astype(float) * prices.astype(float)).sum())
+        if total_mv <= 1e-12:
+            return holdings.astype(float) * 0.0, 0.0
+        fraction = min(1.0, deficit / total_mv + 1e-15)
+        new_holdings = holdings.astype(float) * (1.0 - fraction)
+        cash = cash + fraction * total_mv
+        return new_holdings, float(max(cash, 0.0))
 
     def _collect_dividend_cash(self, holdings: pd.Series, dividend_row: pd.Series) -> float:
         return float((holdings * dividend_row).sum())

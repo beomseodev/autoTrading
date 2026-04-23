@@ -197,6 +197,7 @@ function renderSummary(summary) {
     ["Total contributed", currency(summary.totalContributed)],
     ["Inflation rate", percent(summary.inflationRatePct)],
     ["Deployed capital", currency(summary.deployedCapital)],
+    ["누적 운영보수(TER)", currency(summary.totalExpensePaid ?? 0)],
     ["Final value", currency(summary.finalValue)],
     ["Real final value", currency(summary.realFinalValue)],
     ["Total return", percent(summary.totalReturnPct)],
@@ -492,6 +493,7 @@ function buildExecutionFromFormData(formData) {
   return {
     fractionalShares: formData.get("fractionalShares") === "on",
     dividendReinvestment: formData.get("dividendReinvestment") === "on",
+    dividendTaxRate: Number(formData.get("dividendTaxRate") ?? 0),
     feeRate: Number(formData.get("feeRate")),
     slippageRate: Number(formData.get("slippageRate")),
   };
@@ -520,10 +522,14 @@ function buildRebalanceFromMainForm(formData) {
 
 function buildPayload() {
   const formData = new FormData(form);
-  const positions = [...positionsContainer.querySelectorAll(".position-row")].map((row) => ({
-    ticker: row.querySelector('input[name="ticker"]').value.trim().toUpperCase(),
-    targetWeight: Number(row.querySelector('input[name="targetWeight"]').value),
-  }));
+  const positions = [...positionsContainer.querySelectorAll(".position-row")].map((row) => {
+    const terInput = row.querySelector('input[name="annualExpenseRatio"]');
+    return {
+      ticker: row.querySelector('input[name="ticker"]').value.trim().toUpperCase(),
+      targetWeight: Number(row.querySelector('input[name="targetWeight"]').value),
+      annualExpenseRatio: terInput ? Number(terInput.value) || 0 : 0,
+    };
+  });
 
   return {
     positions,
@@ -577,10 +583,14 @@ function toggleScenarioRebalance(card) {
 }
 
 function getPositionsFromContainer(container) {
-  return [...container.querySelectorAll(".position-row")].map((row) => ({
-    ticker: row.querySelector('input[name="ticker"]').value.trim().toUpperCase(),
-    targetWeight: Number(row.querySelector('input[name="targetWeight"]').value),
-  }));
+  return [...container.querySelectorAll(".position-row")].map((row) => {
+    const terInput = row.querySelector('input[name="annualExpenseRatio"]');
+    return {
+      ticker: row.querySelector('input[name="ticker"]').value.trim().toUpperCase(),
+      targetWeight: Number(row.querySelector('input[name="targetWeight"]').value),
+      annualExpenseRatio: terInput ? Number(terInput.value) || 0 : 0,
+    };
+  });
 }
 
 function buildRebalanceFromScenarioCard(card) {
@@ -648,6 +658,7 @@ function renderCompareSummaryTable(runs) {
 
   compareSummaryBody.innerHTML = [
     row("최종 평가액", (s) => currency(s.finalValue)),
+    row("누적 운영보수(TER)", (s) => currency(s.totalExpensePaid ?? 0)),
     row("실질 최종 평가액", (s) => currency(s.realFinalValue)),
     row("총 수익률", (s) => percent(s.totalReturnPct)),
     row("실질 총 수익률", (s) => percent(s.realTotalReturnPct)),
@@ -677,12 +688,16 @@ function wireScenarioPositionRow(card, row) {
   });
 }
 
-function addScenarioPositionRow(card, ticker = "", targetWeight = "") {
+function addScenarioPositionRow(card, ticker = "", targetWeight = "", annualExpenseRatio = "") {
   const positionsEl = card.querySelector(".scenario-positions");
   const fragment = positionTemplate.content.cloneNode(true);
   const row = fragment.querySelector(".position-row");
   row.querySelector('input[name="ticker"]').value = ticker;
   row.querySelector('input[name="targetWeight"]').value = targetWeight;
+  const terEl = row.querySelector('input[name="annualExpenseRatio"]');
+  if (terEl) {
+    terEl.value = annualExpenseRatio === "" ? "0" : String(annualExpenseRatio);
+  }
   wireScenarioPositionRow(card, row);
   positionsEl.appendChild(fragment);
   syncScenarioRsiTriggerOptions(card);
@@ -726,7 +741,9 @@ function addScenarioCard(preset) {
     { ticker: "SCHD", weight: 50 },
     { ticker: "TQQQ", weight: 50 },
   ];
-  positions.forEach((p) => addScenarioPositionRow(card, p.ticker, p.weight));
+  positions.forEach((p) =>
+    addScenarioPositionRow(card, p.ticker, p.weight, p.annualExpenseRatio !== undefined ? p.annualExpenseRatio : ""),
+  );
 
   if (preset?.rebalanceMode === "rsi") {
     card.querySelector(".scenario-rebalance-mode").value = "rsi";
@@ -858,11 +875,15 @@ function wirePositionRow(row) {
   });
 }
 
-function addPositionRow(ticker = "", targetWeight = "") {
+function addPositionRow(ticker = "", targetWeight = "", annualExpenseRatio = "") {
   const fragment = positionTemplate.content.cloneNode(true);
   const row = fragment.querySelector(".position-row");
   row.querySelector('input[name="ticker"]').value = ticker;
   row.querySelector('input[name="targetWeight"]').value = targetWeight;
+  const terEl = row.querySelector('input[name="annualExpenseRatio"]');
+  if (terEl) {
+    terEl.value = annualExpenseRatio === "" ? "0" : String(annualExpenseRatio);
+  }
 
   wirePositionRow(row);
   positionsContainer.appendChild(fragment);

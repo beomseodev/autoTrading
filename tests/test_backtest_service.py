@@ -270,6 +270,72 @@ def test_dividends_accumulate_as_cash_when_auto_reinvest_disabled() -> None:
     assert result.holdingsSnapshot[1].shares == pytest.approx(5.0, rel=1e-6)
 
 
+def test_ter_daily_drag_reduces_final_value_and_tracks_total_expense() -> None:
+    """수정: 2026-04-24 — 연 TER 일일 차감 시 최종 가치 감소 및 totalExpensePaid 누적 검증."""
+    index = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])
+    prices = pd.DataFrame({"AAA": [100, 100, 100], "BBB": [100, 100, 100]}, index=index, dtype=float)
+    service = BacktestService(FakeProvider(prices))
+    request_no_ter = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 50}, {"ticker": "BBB", "targetWeight": 50}],
+            "initialCapital": 1000,
+            "period": {"startDate": "2024-01-02", "endDate": "2024-01-04"},
+            "rebalance": {"mode": "calendar", "frequency": "monthly"},
+            "execution": {"fractionalShares": True, "feeRate": 0, "slippageRate": 0},
+        }
+    )
+    request_ter = BacktestRequest.model_validate(
+        {
+            "positions": [
+                {"ticker": "AAA", "targetWeight": 50, "annualExpenseRatio": 0.003},
+                {"ticker": "BBB", "targetWeight": 50, "annualExpenseRatio": 0.003},
+            ],
+            "initialCapital": 1000,
+            "period": {"startDate": "2024-01-02", "endDate": "2024-01-04"},
+            "rebalance": {"mode": "calendar", "frequency": "monthly"},
+            "execution": {"fractionalShares": True, "feeRate": 0, "slippageRate": 0},
+        }
+    )
+
+    out0 = service.run(request_no_ter)
+    out1 = service.run(request_ter)
+
+    assert out0.summary.totalExpensePaid == 0
+    assert out1.summary.totalExpensePaid > 0
+    assert out1.summary.finalValue < out0.summary.finalValue
+    # 3거래일 × 시총 약 1000 × 가중 평균 TER 0.003 / 252
+    assert out1.summary.totalExpensePaid == pytest.approx(3 * 1000 * 0.003 / 252, rel=0.02)
+
+
+def test_dividend_tax_reduces_cash_and_reinvestment() -> None:
+    """수정: 2026-04-23 — 배당소득세율 적용 시 순배당만 현금·재투자에 반영되는지 검증."""
+    index = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])
+    prices = pd.DataFrame({"AAA": [100, 100, 100], "BBB": [100, 100, 100]}, index=index, dtype=float)
+    dividends = pd.DataFrame({"AAA": [0, 2, 0], "BBB": [0, 0, 0]}, index=index, dtype=float)
+    service = BacktestService(FakeProvider(prices, dividends=dividends))
+    request = BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 50}, {"ticker": "BBB", "targetWeight": 50}],
+            "initialCapital": 1000,
+            "period": {"startDate": "2024-01-02", "endDate": "2024-01-04"},
+            "rebalance": {"mode": "calendar", "frequency": "monthly"},
+            "execution": {
+                "fractionalShares": True,
+                "dividendReinvestment": True,
+                "dividendTaxRate": 0.154,
+                "feeRate": 0,
+                "slippageRate": 0,
+            },
+        }
+    )
+
+    result = service.run(request)
+
+    assert result.summary.finalValue == pytest.approx(1008.46, rel=1e-6)
+    assert result.holdingsSnapshot[0].shares == pytest.approx(5.0423, rel=1e-6)
+    assert result.holdingsSnapshot[1].shares == pytest.approx(5.0423, rel=1e-6)
+
+
 def test_dividends_are_reinvested_by_target_weights_when_enabled() -> None:
     index = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])
     prices = pd.DataFrame({"AAA": [100, 100, 100], "BBB": [100, 100, 100]}, index=index, dtype=float)
