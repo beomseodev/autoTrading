@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 import pandas as pd
+import numpy as np
 import yfinance as yf
 
 
@@ -40,9 +41,15 @@ class YFinanceDataProvider:
         prices.index = pd.to_datetime(prices.index).tz_localize(None)
         dividends.index = pd.to_datetime(dividends.index).tz_localize(None)
 
-        prices = prices.sort_index().dropna(how="any")
-        if prices.empty:
+        prices = prices.sort_index()
+        complete = prices.dropna(how="any")
+        if complete.empty:
             raise DataProviderError("Price data is empty after aligning tickers on common trading days.")
+        prices = prices.loc[complete.index[0]:complete.index[-1]]
+        if prices.isna().any().any():
+            raise DataProviderError("분석 기간 중 일부 종목의 시세가 누락되었습니다. 배당·수익 왜곡을 막기 위해 계산을 중단했습니다. 기간 또는 종목을 바꿔주세요.")
+        if not np.isfinite(prices.to_numpy(dtype=float)).all() or (prices <= 0).any().any():
+            raise DataProviderError("Price data must contain finite, positive prices.")
 
         dividends = dividends.sort_index().reindex(prices.index).fillna(0.0)
 

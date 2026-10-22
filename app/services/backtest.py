@@ -18,6 +18,17 @@ class TradeResult:
     turnover_pct: float
 
 
+@dataclass
+class ETFGuardContext:
+    risk_ticker: str
+    core_ticker: str
+    defensive_ticker: str
+    sma_window: int
+    prices: pd.DataFrame
+    risk_sma: pd.Series
+    risk_rsi: pd.Series
+
+
 class BacktestService:
     INFLATION_RATE = 0.03
     # 수정: 2026-04-24 — 연 TER를 거래일당 선형 분할(업계 관행 252 거래일/년)
@@ -29,18 +40,33 @@ class BacktestService:
     def run(self, request: BacktestRequest) -> BacktestResponse:
         start_date, end_date = self._resolve_period(request)
         tickers = [position.ticker for position in request.positions]
+        if request.rebalance.mode == "etf_guard" and request.rebalance.guardDefensiveTicker not in tickers:
+            tickers.append(str(request.rebalance.guardDefensiveTicker))
         target_weights = pd.Series(
             {position.ticker: position.targetWeight / 100 for position in request.positions},
             dtype=float,
-        )
+        ).reindex(tickers, fill_value=0.0)
         # 수정: 2026-04-24 — 티커별 연 운영보수율(TER), 일일 차감에 사용
         expense_ratios = pd.Series(
             {position.ticker: float(position.annualExpenseRatio) for position in request.positions},
             dtype=float,
         ).reindex(tickers, fill_value=0.0)
-        market_data = self.data_provider.fetch_market_data(tickers, start_date, end_date)
-        prices = market_data.prices
-        dividends = market_data.dividends
+        data_start_date = (
+            start_date - timedelta(days=max(request.rebalance.guardSmaWindow * 3, request.rebalance.guardRsiPeriod * 3, 30))
+            if request.rebalance.mode == "etf_guard"
+            else start_date
+        )
+        market_data = self.data_provider.fetch_market_data(tickers, data_start_date, end_date)
+        full_prices = market_data.prices.reindex(columns=tickers)
+        full_dividends = market_data.dividends.reindex(columns=tickers, fill_value=0.0)
+        guard_context = self._build_etf_guard_context(full_prices, request) if request.rebalance.mode == "etf_guard" else None
+        if guard_context is not None:
+            period_mask = (full_prices.index >= pd.Timestamp(start_date)) & (full_prices.index <= pd.Timestamp(end_date))
+            prices = full_prices.loc[period_mask]
+            dividends = full_dividends.loc[period_mask]
+        else:
+            prices = full_prices
+            dividends = full_dividends
         if len(prices.index) < 2:
             raise DataProviderError("At least two trading days are required to run a backtest.")
 
@@ -50,11 +76,17 @@ class BacktestService:
         cash_flows: list[tuple[date, float]] = [(prices.index[0].date(), -float(request.initialCapital))]
         events: list[RebalanceEvent] = []
 
+        active_target_weights = (
+            self._etf_guard_target_weights_for_date(guard_context, prices.index[0], target_weights)
+            if guard_context is not None
+            else target_weights
+        )
+
         initial_trade = self._rebalance_to_target(
             current_holdings=holdings,
             cash=cash,
             prices=prices.iloc[0],
-            target_weights=target_weights,
+            target_weights=active_target_weights,
             fractional_shares=request.execution.fractionalShares,
             fee_rate=request.execution.feeRate,
             slippage_rate=request.execution.slippageRate,
@@ -75,10 +107,34 @@ class BacktestService:
         equity_curve: list[EquityPoint] = []
         real_equity_curve: list[EquityPoint] = []
         total_expense_paid = 0.0
+        previous_value = float(request.initialCapital)
+        performance_index = performance_peak = 1.0
+        mdd_pct = 0.0
+        pending_band_reason = None
         for index_position, timestamp in enumerate(prices.index):
             current_prices = prices.loc[timestamp]
+            contribution_today = 0.0
 
             if index_position > 0:
+                rebalance_target_weights = (
+                    self._etf_guard_target_weights_for_date(guard_context, timestamp, target_weights)
+                    if guard_context is not None
+                    else target_weights
+                )
+                guard_reason = (
+                    self._etf_guard_rebalance_reason(
+                        context=guard_context,
+                        timestamp=timestamp,
+                        holdings=holdings,
+                        cash=cash,
+                        active_target_weights=active_target_weights,
+                        next_target_weights=rebalance_target_weights,
+                        max_weight_pct=request.rebalance.guardRiskMaxWeightPct,
+                        rsi_upper=request.rebalance.guardRsiUpper,
+                    )
+                    if guard_context is not None
+                    else None
+                )
                 # 수정: 2026-04-23 — 야후 배당은 총액 기준; dividendTaxRate 만큼 차감한 순액만 현금·재투자에 반영
                 gross_dividend_cash = self._collect_dividend_cash(holdings, dividends.loc[timestamp])
                 tax_rate = float(request.execution.dividendTaxRate)
@@ -92,7 +148,7 @@ class BacktestService:
                         cash=cash,
                         cash_to_invest=dividend_cash,
                         prices=current_prices,
-                        target_weights=target_weights,
+                        target_weights=rebalance_target_weights,
                         fractional_shares=request.execution.fractionalShares,
                         fee_rate=request.execution.feeRate,
                         slippage_rate=request.execution.slippageRate,
@@ -110,6 +166,7 @@ class BacktestService:
                         )
 
                 if timestamp in contribution_dates:
+                    contribution_today = float(request.monthlyContribution)
                     cash += request.monthlyContribution
                     total_contributed += request.monthlyContribution
                     cash_flows.append((timestamp.date(), -float(request.monthlyContribution)))
@@ -119,7 +176,7 @@ class BacktestService:
                         cash=cash,
                         cash_to_invest=request.monthlyContribution,
                         prices=current_prices,
-                        target_weights=target_weights,
+                        target_weights=rebalance_target_weights,
                         fractional_shares=request.execution.fractionalShares,
                         fee_rate=request.execution.feeRate,
                         slippage_rate=request.execution.slippageRate,
@@ -142,21 +199,16 @@ class BacktestService:
                 elif request.rebalance.mode == "rsi" and timestamp in rsi_schedule:
                     reason = rsi_schedule[timestamp]
                 elif request.rebalance.mode == "band":
-                    # 수정: 2026-04-23 — 매일 종가 기준 비중 드리프트가 밴드 폭(%p)을 넘으면 목표로 리밸런스
-                    reason = self._band_rebalance_reason(
-                        holdings=holdings,
-                        cash=cash,
-                        prices=current_prices,
-                        target_weights=target_weights,
-                        band_width_pct=float(request.rebalance.bandWidthPct),
-                    )
+                    reason = pending_band_reason
+                elif request.rebalance.mode == "etf_guard":
+                    reason = guard_reason
 
                 if reason is not None:
                     trade = self._rebalance_to_target(
                         current_holdings=holdings,
                         cash=cash,
                         prices=current_prices,
-                        target_weights=target_weights,
+                        target_weights=rebalance_target_weights,
                         fractional_shares=request.execution.fractionalShares,
                         fee_rate=request.execution.feeRate,
                         slippage_rate=request.execution.slippageRate,
@@ -171,6 +223,7 @@ class BacktestService:
                                 turnoverPct=round(trade.turnover_pct, 4),
                             )
                         )
+                active_target_weights = rebalance_target_weights
 
             # 수정: 2026-04-24 — 일일 TER: 현금에서 차감, 부족 시 종가 기준 보유 시가총액 비례 매도(매매 수수료 미부과)
             daily_ter = self._compute_daily_ter_amount(holdings, current_prices, expense_ratios)
@@ -178,6 +231,16 @@ class BacktestService:
             holdings, cash = self._apply_daily_ter_to_portfolio(holdings, cash, current_prices, daily_ter)
 
             portfolio_value = cash + float((holdings * current_prices).sum())
+            # Contributions arrive at the close; remove only external cash, retaining trading costs.
+            if previous_value > 0:
+                performance_index *= max(0.0, (portfolio_value - contribution_today) / previous_value)
+            performance_peak = max(performance_peak, performance_index)
+            mdd_pct = min(mdd_pct, (performance_index / performance_peak - 1) * 100)
+            previous_value = portfolio_value
+            if request.rebalance.mode == "band":
+                pending_band_reason = self._band_rebalance_reason(
+                    holdings, cash, current_prices, target_weights, float(request.rebalance.bandWidthPct)
+                )
             equity_curve.append(EquityPoint(date=timestamp.date(), value=round(portfolio_value, 4)))
             real_equity_curve.append(
                 EquityPoint(
@@ -215,11 +278,6 @@ class BacktestService:
             elapsed_years = elapsed_days / 365.25
             cagr_pct = ((final_value / request.initialCapital) ** (1 / elapsed_years) - 1) * 100
         xirr_pct = self._compute_xirr(cash_flows + [(prices.index[-1].date(), final_value)])
-
-        equity_values = pd.Series([point.value for point in equity_curve], index=prices.index, dtype=float)
-        running_max = equity_values.cummax()
-        drawdown = (equity_values / running_max) - 1
-        mdd_pct = float(drawdown.min() * 100)
 
         return BacktestResponse(
             summary=SummaryOutput(
@@ -275,6 +333,88 @@ class BacktestService:
 
         first_days = pd.Series(trading_index, index=trading_index).groupby(trading_index.to_period("M")).first()
         return set(first_days.iloc[1:].tolist())
+
+    def _build_etf_guard_context(self, prices: pd.DataFrame, request: BacktestRequest) -> ETFGuardContext:
+        risk_ticker = str(request.rebalance.guardRiskTicker)
+        core_ticker = str(request.rebalance.guardCoreTicker)
+        defensive_ticker = str(request.rebalance.guardDefensiveTicker)
+        missing_tickers = [ticker for ticker in [risk_ticker, core_ticker, defensive_ticker] if ticker not in prices.columns]
+        if missing_tickers:
+            raise DataProviderError(f"ETF Guard price data is missing for: {', '.join(missing_tickers)}.")
+
+        risk_prices = prices[risk_ticker]
+        sma_window = int(request.rebalance.guardSmaWindow)
+        return ETFGuardContext(
+            risk_ticker=risk_ticker,
+            core_ticker=core_ticker,
+            defensive_ticker=defensive_ticker,
+            sma_window=sma_window,
+            prices=prices,
+            risk_sma=risk_prices.rolling(window=sma_window, min_periods=sma_window).mean(),
+            risk_rsi=compute_rsi(risk_prices, period=request.rebalance.guardRsiPeriod),
+        )
+
+    def _etf_guard_signal_position(self, context: ETFGuardContext, timestamp: pd.Timestamp) -> int:
+        position = context.prices.index.get_loc(timestamp)
+        if not isinstance(position, int):
+            raise DataProviderError("ETF Guard requires a unique trading calendar.")
+        signal_position = position - 1
+        if signal_position < 0:
+            raise DataProviderError("ETF Guard requires at least one trading day before the backtest start date.")
+        if np.isnan(context.risk_sma.iloc[signal_position]):
+            raise DataProviderError(
+                f"ETF Guard requires at least {context.sma_window} prior trading days to compute the SMA signal."
+            )
+        return signal_position
+
+    def _etf_guard_target_weights_for_date(
+        self,
+        context: ETFGuardContext | None,
+        timestamp: pd.Timestamp,
+        target_weights: pd.Series,
+    ) -> pd.Series:
+        if context is None:
+            return target_weights
+
+        signal_position = self._etf_guard_signal_position(context, timestamp)
+        risk_off = context.prices[context.risk_ticker].iloc[signal_position] <= context.risk_sma.iloc[signal_position]
+        active_weights = pd.Series(0.0, index=target_weights.index, dtype=float)
+        if risk_off:
+            active_weights[context.defensive_ticker] = float(target_weights[context.risk_ticker])
+        else:
+            active_weights[context.risk_ticker] = float(target_weights[context.risk_ticker])
+        active_weights[context.core_ticker] = float(target_weights[context.core_ticker])
+        return active_weights
+
+    def _etf_guard_rebalance_reason(
+        self,
+        context: ETFGuardContext,
+        timestamp: pd.Timestamp,
+        holdings: pd.Series,
+        cash: float,
+        active_target_weights: pd.Series,
+        next_target_weights: pd.Series,
+        max_weight_pct: float,
+        rsi_upper: float,
+    ) -> str | None:
+        signal_position = self._etf_guard_signal_position(context, timestamp)
+        risk_off = context.prices[context.risk_ticker].iloc[signal_position] <= context.risk_sma.iloc[signal_position]
+        if risk_off:
+            return "etf_guard:risk-off:sma"
+
+        if not np.allclose(active_target_weights.values, next_target_weights.values, atol=1e-12):
+            return "etf_guard:risk-on:sma"
+
+        previous_prices = context.prices.iloc[signal_position].reindex(holdings.index)
+        risk_weight = self._position_weight(holdings, cash, previous_prices, context.risk_ticker)
+        target_risk_weight = float(next_target_weights[context.risk_ticker])
+        reasons: list[str] = []
+        previous_rsi = context.risk_rsi.iloc[signal_position]
+        if not np.isnan(previous_rsi) and previous_rsi >= rsi_upper and risk_weight > target_risk_weight + 1e-12:
+            reasons.append(f"etf_guard:rsi:{context.risk_ticker}:upper")
+        if risk_weight >= (max_weight_pct / 100.0) - 1e-12:
+            reasons.append(f"etf_guard:max-weight:{context.risk_ticker}")
+        return ",".join(reasons) if reasons else None
 
     def _band_rebalance_reason(
         self,
@@ -437,6 +577,12 @@ class BacktestService:
         new_holdings = holdings.astype(float) * (1.0 - fraction)
         cash = cash + fraction * total_mv
         return new_holdings, float(max(cash, 0.0))
+
+    def _position_weight(self, holdings: pd.Series, cash: float, prices: pd.Series, ticker: str) -> float:
+        portfolio_value = cash + float((holdings * prices).sum())
+        if portfolio_value <= 1e-12:
+            return 0.0
+        return float((holdings[ticker] * prices[ticker]) / portfolio_value)
 
     def _collect_dividend_cash(self, holdings: pd.Series, dividend_row: pd.Series) -> float:
         return float((holdings * dividend_row).sum())

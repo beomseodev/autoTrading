@@ -15,6 +15,8 @@ class PositionInput(BaseModel):
     @model_validator(mode="after")
     def normalize_ticker(self) -> "PositionInput":
         self.ticker = self.ticker.strip().upper()
+        if not self.ticker:
+            raise ValueError("Ticker cannot be empty.")
         return self
 
 
@@ -43,7 +45,8 @@ class PeriodInput(BaseModel):
 
 
 class RebalanceInput(BaseModel):
-    mode: Literal["calendar", "rsi", "band"]
+    model_config = {"allow_inf_nan": False}
+    mode: Literal["calendar", "rsi", "band", "etf_guard"]
     frequency: Literal["monthly", "quarterly", "yearly"] | None = None
     rsiPeriod: int = Field(default=14, ge=2, le=200)
     lower: float = Field(default=30, gt=0, lt=100)
@@ -52,11 +55,24 @@ class RebalanceInput(BaseModel):
     rsiTriggerTicker: str | None = None
     # 수정: 2026-04-23 — 드리프트 밴드 리밸런스: 목표 비중 대비 실제 비중 절대 편차 허용폭(%p). mode=band일 때만 필수.
     bandWidthPct: float | None = None
+    guardRiskTicker: str | None = None
+    guardCoreTicker: str | None = None
+    guardDefensiveTicker: str | None = None
+    guardSmaWindow: int = Field(default=200, ge=2, le=500)
+    guardRsiPeriod: int = Field(default=14, ge=2, le=200)
+    guardRsiUpper: float = Field(default=70, gt=0, lt=100)
+    guardRiskMaxWeightPct: float = Field(default=60, gt=0, le=100)
 
     @model_validator(mode="after")
-    def normalize_rsi_trigger_ticker(self) -> "RebalanceInput":
+    def normalize_tickers(self) -> "RebalanceInput":
         if self.rsiTriggerTicker is not None:
             self.rsiTriggerTicker = self.rsiTriggerTicker.strip().upper() or None
+        if self.guardRiskTicker is not None:
+            self.guardRiskTicker = self.guardRiskTicker.strip().upper() or None
+        if self.guardCoreTicker is not None:
+            self.guardCoreTicker = self.guardCoreTicker.strip().upper() or None
+        if self.guardDefensiveTicker is not None:
+            self.guardDefensiveTicker = self.guardDefensiveTicker.strip().upper() or None
         return self
 
     @model_validator(mode="after")
@@ -72,6 +88,16 @@ class RebalanceInput(BaseModel):
                 raise ValueError("bandWidthPct is required when mode is band.")
             if self.bandWidthPct <= 0 or self.bandWidthPct > 50:
                 raise ValueError("bandWidthPct must be greater than 0 and at most 50.")
+        if self.mode == "etf_guard":
+            if not self.guardRiskTicker:
+                raise ValueError("guardRiskTicker is required when mode is etf_guard.")
+            if not self.guardCoreTicker:
+                raise ValueError("guardCoreTicker is required when mode is etf_guard.")
+            if not self.guardDefensiveTicker:
+                raise ValueError("guardDefensiveTicker is required when mode is etf_guard.")
+            guard_tickers = {self.guardRiskTicker, self.guardCoreTicker, self.guardDefensiveTicker}
+            if len(guard_tickers) != 3:
+                raise ValueError("guardRiskTicker, guardCoreTicker, and guardDefensiveTicker must be distinct.")
         return self
 
 
@@ -85,6 +111,7 @@ class ExecutionInput(BaseModel):
 
 
 class BacktestRequest(BaseModel):
+    model_config = {"allow_inf_nan": False}
     positions: list[PositionInput]
     initialCapital: float = Field(gt=0)
     monthlyContribution: float = Field(default=0, ge=0)
@@ -108,6 +135,17 @@ class BacktestRequest(BaseModel):
         if self.rebalance.mode == "rsi" and self.rebalance.rsiSignalScope == "single":
             if self.rebalance.rsiTriggerTicker not in unique_tickers:
                 raise ValueError("rsiTriggerTicker must match one of the selected position tickers.")
+
+        if self.rebalance.mode == "etf_guard":
+            guard_position_tickers = {self.rebalance.guardRiskTicker, self.rebalance.guardCoreTicker}
+            if unique_tickers != guard_position_tickers:
+                raise ValueError("etf_guard positions must contain only guardRiskTicker and guardCoreTicker.")
+            risk_weight = next(p.targetWeight for p in self.positions if p.ticker == self.rebalance.guardRiskTicker)
+            if risk_weight > self.rebalance.guardRiskMaxWeightPct:
+                raise ValueError("위험 자산의 목표 비중은 최대 비중 이하여야 합니다.")
+
+        if not self.execution.fractionalShares and any(p.annualExpenseRatio > 0 for p in self.positions):
+            raise ValueError("정수주 모드에서는 추가 연간 비용을 0으로 설정해주세요.")
 
         return self
 
@@ -195,3 +233,53 @@ class CompareBacktestsResponse(BaseModel):
     """비교 API 응답: 시나리오별 결과 배열."""
 
     runs: list[LabeledBacktestResult]
+
+
+class RiskProfileRequest(BaseModel):
+    model_config = {"allow_inf_nan": False}
+    tickers: list[str] = Field(min_length=2, max_length=2)
+    weightsPct: list[float] = Field(default_factory=lambda: [50.0, 50.0], min_length=2, max_length=2)
+    period: PeriodInput
+
+    @model_validator(mode="after")
+    def normalize_and_validate_inputs(self) -> "RiskProfileRequest":
+        self.tickers = [ticker.strip().upper() for ticker in self.tickers]
+        if any(not ticker for ticker in self.tickers):
+            raise ValueError("Ticker cannot be empty.")
+        if len(set(self.tickers)) != len(self.tickers):
+            raise ValueError("Duplicate tickers are not allowed.")
+        if any(weight < 0 for weight in self.weightsPct):
+            raise ValueError("weightsPct cannot contain negative values.")
+        if abs(sum(self.weightsPct) - 100.0) > 0.001:
+            raise ValueError("weightsPct must add up to 100.")
+        return self
+
+
+class RiskProfileMetric(BaseModel):
+    ticker: str
+    totalReturnPct: float
+    annualizedReturnPct: float
+    annualizedVolatilityPct: float
+    mddPct: float
+
+
+class RiskProfileCurvePoint(BaseModel):
+    date: date
+    values: dict[str, float]
+
+
+class RiskProfileAllocationPoint(BaseModel):
+    weightsPct: list[float]
+    metric: RiskProfileMetric
+
+
+class RiskProfileResponse(BaseModel):
+    startDate: date
+    endDate: date
+    tickers: list[str]
+    weightsPct: list[float]
+    portfolioMetric: RiskProfileMetric
+    allocationProfiles: list[RiskProfileAllocationPoint]
+    metrics: list[RiskProfileMetric]
+    correlation: float | None
+    normalizedPriceCurve: list[RiskProfileCurvePoint]

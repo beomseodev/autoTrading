@@ -655,7 +655,7 @@ def test_band_rebalance_triggers_when_drift_exceeds_band() -> None:
 
     band_events = [e for e in result.rebalanceEvents if e.reason.startswith("band:")]
     assert len(band_events) == 1
-    assert band_events[0].date == date(2024, 1, 3)
+    assert band_events[0].date == date(2024, 1, 4)
 
 
 def test_band_rebalance_skips_when_within_band() -> None:
@@ -678,6 +678,152 @@ def test_band_rebalance_skips_when_within_band() -> None:
 
     result = service.run(request)
     assert not any(e.reason.startswith("band:") for e in result.rebalanceEvents)
+
+
+def make_etf_guard_request(**rebalance_overrides) -> BacktestRequest:
+    rebalance = {
+        "mode": "etf_guard",
+        "guardRiskTicker": "AAA",
+        "guardCoreTicker": "BBB",
+        "guardDefensiveTicker": "CCC",
+        "guardSmaWindow": 3,
+        "guardRsiPeriod": 2,
+        "guardRsiUpper": 70,
+        "guardRiskMaxWeightPct": 60,
+    }
+    rebalance.update(rebalance_overrides)
+    return BacktestRequest.model_validate(
+        {
+            "positions": [{"ticker": "AAA", "targetWeight": 50}, {"ticker": "BBB", "targetWeight": 50}],
+            "initialCapital": 1000,
+            "period": {"startDate": "2024-01-05", "endDate": "2024-01-11"},
+            "rebalance": rebalance,
+            "execution": {"fractionalShares": True, "dividendReinvestment": False, "feeRate": 0, "slippageRate": 0},
+        }
+    )
+
+
+def test_etf_guard_rejects_positions_outside_risk_and_core() -> None:
+    with pytest.raises(ValueError, match="etf_guard positions must contain only"):
+        BacktestRequest.model_validate(
+            {
+                "positions": [{"ticker": "AAA", "targetWeight": 50}, {"ticker": "ZZZ", "targetWeight": 50}],
+                "initialCapital": 1000,
+                "period": {"startDate": "2024-01-05", "endDate": "2024-01-11"},
+                "rebalance": {
+                    "mode": "etf_guard",
+                    "guardRiskTicker": "AAA",
+                    "guardCoreTicker": "BBB",
+                    "guardDefensiveTicker": "CCC",
+                    "guardSmaWindow": 3,
+                },
+            }
+        )
+
+
+def test_etf_guard_uses_defensive_asset_without_position_input() -> None:
+    index = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-08"])
+    prices = pd.DataFrame(
+        {
+            "AAA": [100, 100, 100, 90, 90],
+            "BBB": [100, 100, 100, 100, 100],
+            "CCC": [100, 100, 100, 100, 100],
+        },
+        index=index,
+        dtype=float,
+    )
+    service = BacktestService(FakeProvider(prices))
+
+    result = service.run(make_etf_guard_request())
+
+    assert {item.ticker for item in result.holdingsSnapshot} == {"AAA", "BBB", "CCC"}
+    defensive = next(item for item in result.holdingsSnapshot if item.ticker == "CCC")
+    assert defensive.weight == pytest.approx(50.0, rel=1e-4)
+
+
+def test_etf_guard_switches_back_to_risk_asset_above_sma() -> None:
+    index = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-08", "2024-01-09"])
+    prices = pd.DataFrame(
+        {
+            "AAA": [100, 100, 90, 120, 120, 120],
+            "BBB": [100, 100, 100, 100, 100, 100],
+            "CCC": [100, 100, 100, 100, 100, 100],
+        },
+        index=index,
+        dtype=float,
+    )
+    service = BacktestService(FakeProvider(prices))
+
+    result = service.run(make_etf_guard_request())
+
+    reasons = [event.reason for event in result.rebalanceEvents]
+    assert any(reason == "etf_guard:risk-on:sma" for reason in reasons)
+    risk = next(item for item in result.holdingsSnapshot if item.ticker == "AAA")
+    defensive = next(item for item in result.holdingsSnapshot if item.ticker == "CCC")
+    assert risk.weight == pytest.approx(50.0, rel=1e-4)
+    assert defensive.weight == pytest.approx(0.0, abs=1e-6)
+
+
+def test_etf_guard_rebalances_on_max_weight_or_rsi() -> None:
+    index = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-08", "2024-01-09"])
+    prices = pd.DataFrame(
+        {
+            "AAA": [90, 95, 100, 100, 150, 150],
+            "BBB": [100, 100, 100, 100, 100, 100],
+            "CCC": [100, 100, 100, 100, 100, 100],
+        },
+        index=index,
+        dtype=float,
+    )
+    service = BacktestService(FakeProvider(prices))
+
+    max_weight_result = service.run(make_etf_guard_request(guardRsiUpper=99, guardRiskMaxWeightPct=55))
+    rsi_result = service.run(make_etf_guard_request(guardRsiUpper=70, guardRiskMaxWeightPct=90))
+
+    assert any("etf_guard:max-weight:AAA" in event.reason for event in max_weight_result.rebalanceEvents)
+    assert any("etf_guard:rsi:AAA:upper" in event.reason for event in rsi_result.rebalanceEvents)
+
+
+def test_etf_guard_rsi_does_not_buy_when_risk_weight_is_below_target() -> None:
+    index = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05", "2024-01-08", "2024-01-09"])
+    prices = pd.DataFrame(
+        {
+            "AAA": [100, 100, 100, 120, 120, 120],
+            "BBB": [100, 100, 100, 200, 200, 200],
+            "CCC": [100, 100, 100, 100, 100, 100],
+        },
+        index=index,
+        dtype=float,
+    )
+    service = BacktestService(FakeProvider(prices))
+
+    result = service.run(make_etf_guard_request(guardRsiUpper=70, guardRiskMaxWeightPct=90))
+
+    assert not any("etf_guard:rsi:AAA:upper" in event.reason for event in result.rebalanceEvents)
+
+
+def test_etf_guard_contribution_invests_by_defensive_target_when_risk_off() -> None:
+    index = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-31", "2024-02-01"])
+    prices = pd.DataFrame(
+        {
+            "AAA": [100, 100, 100, 90, 90],
+            "BBB": [100, 100, 100, 100, 100],
+            "CCC": [100, 100, 100, 100, 100],
+        },
+        index=index,
+        dtype=float,
+    )
+    service = BacktestService(FakeProvider(prices))
+    request = make_etf_guard_request()
+    request.monthlyContribution = 100
+    request.period.endDate = date(2024, 2, 1)
+
+    result = service.run(request)
+
+    contribution = next(event for event in result.rebalanceEvents if event.reason == "contribution:monthly")
+    assert contribution.date == date(2024, 2, 1)
+    defensive = next(item for item in result.holdingsSnapshot if item.ticker == "CCC")
+    assert defensive.value > 500
 
 
 def test_rsi_single_scope_requires_trigger_ticker() -> None:

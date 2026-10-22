@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+.git
+.venv
+.pytest_cache
+.team-review
+output
+tests
+scripts
+**/__pycache__
+*.log

@@ -9,6 +9,10 @@ description = "FastAPI app for backtesting US stock portfolios."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+  "authlib>=1.9,<2",
+  "httpx>=0.28,<1",
+  "itsdangerous>=2.2,<3",
+  "python-dotenv>=1,<2",
   "fastapi>=0.115.0,<1.0.0",
   "pandas>=2.2.0,<3.0.0",
   "pydantic>=2.8.0,<3.0.0",

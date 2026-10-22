@@ -16,3 +16,4 @@ if (-not (Test-Path $py)) {
 }
 
 & $py -m pytest @RemainingArguments
+exit $LASTEXITCODE

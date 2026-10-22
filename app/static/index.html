@@ -3,41 +3,37 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>US Portfolio Backtester</title>
+  <title>포트폴리오 실험실</title>
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
   <main class="page">
-    <section class="hero">
-      <p class="eyebrow">US STOCKS BACKTESTER</p>
-      <h1>US Portfolio Backtester</h1>
-      <p class="hero-copy">
-        미국 주식·ETF 포트폴리오를 백테스트합니다.
-        <strong>단일 조합</strong>으로 돌리거나, 아래 설정에서
-        <strong>여러 포트폴리오 비교</strong>를 켜면 최대 8개 시나리오를 같은 기간·자본 조건으로 한 번에 비교할 수 있습니다
-        (요약 표·다중 자산 곡선·시나리오별 홀딩/리밸런스 이벤트).
-      </p>
-    </section>
+    <header class="hero">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">P</span><div><p class="eyebrow">PORTFOLIO LAB</p><h1>포트폴리오 실험실</h1></div></div>
+      <nav class="page-nav"><a href="/">나의 대시보드</a><a href="/lab" aria-current="page">포트폴리오 실험실</a><a href="#risk-analysis">위험 분석</a><a href="#getting-started">사용 안내</a></nav>
+      <span class="market-label">미국 주식 · ETF <b>USD</b></span>
+    </header>
 
-    <section class="panel form-panel">
+    <div class="dashboard">
+    <section class="panel form-panel" id="setup">
       <div class="panel-header">
         <div>
-          <h2>Backtest Setup</h2>
-          <p id="setup-hint">Target weights must add up to 100%.</p>
+          <h2>포트폴리오 설정</h2>
+          <p id="setup-hint">목표 비중의 합계를 100%로 맞춰 주세요.</p>
           <p class="run-mode-hint" id="run-mode-hint">
             먼저 모드를 고르세요. 비교 모드에서는 카드마다 다른 티커·비중·리밸런스를 넣을 수 있습니다.
           </p>
           <div class="run-mode-toggle" role="tablist" aria-label="백테스트 실행 모드">
             <button type="button" class="run-mode-btn active" data-run-mode="single" id="run-mode-single" role="tab" aria-selected="true">
-              단일 포트폴리오
+              단일 조합
             </button>
             <button type="button" class="run-mode-btn" data-run-mode="compare" id="run-mode-compare" role="tab" aria-selected="false">
-              여러 포트폴리오 비교
+              조합 비교
             </button>
           </div>
         </div>
         <div class="panel-header-actions">
-          <button id="add-position-btn" type="button" class="secondary-btn single-only">Add Ticker</button>
+          <button id="add-position-btn" type="button" class="secondary-btn single-only">종목 추가</button>
           <button id="add-scenario-btn" type="button" class="secondary-btn compare-only hidden">
             시나리오 추가
           </button>
@@ -46,23 +42,69 @@
 
       <form id="backtest-form">
         <div id="single-setup" class="single-only">
-          <div id="positions" class="positions"></div>
+          <div id="positions" class="positions"></div><div class="allocation-preview" aria-live="polite"></div>
+
+        </div>
+        <div id="compare-setup" class="compare-only hidden">
+          <p class="compare-intro">기간과 투자금은 공통으로 적용합니다. 카드마다 종목·비중·리밸런싱을 설정하세요. 실제 거래일이 동일한 결과만 비교합니다.</p>
+          <div id="scenarios-container" class="scenarios-stack" aria-live="polite"></div>
+        </div>
+
+        <div class="grid three">
+          <label>
+            <span>시작 투자금 ($)</span>
+            <input type="number" name="initialCapital" value="10000" min="1" step="0.01" required />
+          </label>
+          <label>
+            <span>매월 추가금 ($)</span>
+            <input type="number" name="monthlyContribution" value="0" min="0" step="0.01" />
+          </label>
+          <label>
+            <span>투자 기간</span>
+            <select id="period-mode" name="periodMode">
+              <option value="range">날짜 직접 선택</option>
+              <option value="lookback">최근 N년</option>
+            </select>
+          </label>
+        </div>
+
+        <div id="period-range-fields" class="grid two">
+          <label>
+            <span>시작일</span>
+            <input type="date" name="startDate" value="2020-01-01" required />
+          </label>
+          <label>
+            <span>종료일</span>
+            <input type="date" name="endDate" value="2024-12-31" required />
+          </label>
+        </div>
+
+        <div id="period-lookback-fields" class="grid one hidden">
+          <label>
+            <span>최근 몇 년</span>
+            <input type="number" name="lookbackYears" value="5" min="0.25" max="50" step="0.25" />
+          </label>
+        </div>
+
+<details class="advanced-settings single-only"><summary>리밸런싱 설정 <small>기본: 매월</small></summary>
+        <p class="method-note">리밸런싱은 가격 변동으로 달라진 비중을 매수·매도해 목표 비중으로 되돌리는 작업입니다. 예를 들어 50:50이 60:40이 되었다면 일부를 팔고 사서 다시 50:50에 맞춥니다.</p>
 
         <div class="grid two">
           <label>
-            <span>Rebalance mode</span>
+            <span>리밸런싱 방식</span>
             <select id="rebalance-mode" name="rebalanceMode">
-              <option value="calendar">Calendar Rebalance</option>
-              <option value="rsi">RSI Rebalance</option>
-              <option value="band">Band (drift) Rebalance</option>
+              <option value="calendar">정기 리밸런싱</option>
+              <option value="rsi">RSI 신호</option>
+              <option value="band">비중 이탈 밴드</option>
+              <option value="etf_guard">ETF Guard</option>
             </select>
           </label>
           <label id="frequency-field">
-            <span>Calendar frequency</span>
+            <span>조정 주기</span>
             <select name="frequency">
-              <option value="monthly">Monthly</option>
-              <option value="quarterly">Quarterly</option>
-              <option value="yearly">Yearly</option>
+              <option value="monthly">매월</option>
+              <option value="quarterly">분기마다</option>
+              <option value="yearly">매년</option>
             </select>
           </label>
         </div>
@@ -76,92 +118,79 @@
 
         <div id="rsi-fields" class="grid three hidden">
           <label>
-            <span>RSI period</span>
+            <span>RSI 기간</span>
             <input type="number" name="rsiPeriod" value="14" min="2" max="200" />
           </label>
           <label>
-            <span>Lower threshold</span>
+            <span>하단 기준</span>
             <input type="number" name="lower" value="30" min="1" max="99" step="0.1" />
           </label>
           <label>
-            <span>Upper threshold</span>
+            <span>상단 기준</span>
             <input type="number" name="upper" value="70" min="1" max="99" step="0.1" />
           </label>
         </div>
 
         <div id="rsi-scope-fields" class="grid two hidden">
           <label>
-            <span>RSI signal scope</span>
+            <span>신호 확인 범위</span>
             <select id="rsi-signal-scope" name="rsiSignalScope">
-              <option value="all">All portfolio tickers</option>
-              <option value="single">Selected ticker only</option>
+              <option value="all">모든 종목</option>
+              <option value="single">지정한 종목</option>
             </select>
           </label>
           <label id="rsi-trigger-field" class="hidden">
-            <span>RSI trigger ticker</span>
+            <span>신호 확인 종목</span>
             <select id="rsi-trigger-ticker" name="rsiTriggerTicker"></select>
           </label>
         </div>
-        </div>
-
-        <div id="compare-setup" class="compare-only hidden">
-          <p class="compare-intro">
-            기간·초기자금·월납입·실행 옵션은 아래 공통 입력을 사용합니다. 각 시나리오 카드에서 포지션과 리밸런스만 다르게 설정하세요. 차트는 모든 시리즈에 값이 있는 거래일(교집합)만 표시합니다.
-          </p>
-          <div id="scenarios-container" class="scenarios-stack" aria-live="polite"></div>
-        </div>
-
-        <div class="grid three">
+        <div id="guard-fields" class="grid three hidden">
           <label>
-            <span>Initial capital (USD)</span>
-            <input type="number" name="initialCapital" value="10000" min="1" step="0.01" required />
+            <span>위험자산 ETF</span>
+            <input type="text" name="guardRiskTicker" value="TQQQ" />
           </label>
           <label>
-            <span>Monthly contribution (USD)</span>
-            <input type="number" name="monthlyContribution" value="0" min="0" step="0.01" />
+            <span>핵심 ETF</span>
+            <input type="text" name="guardCoreTicker" value="SCHD" />
           </label>
           <label>
-            <span>Period input mode</span>
-            <select id="period-mode" name="periodMode">
-              <option value="range">Start / End Date</option>
-              <option value="lookback">Trailing N Years</option>
-            </select>
-          </label>
-        </div>
-
-        <div id="period-range-fields" class="grid two">
-          <label>
-            <span>Start date</span>
-            <input type="date" name="startDate" value="2020-01-01" required />
+            <span>방어 ETF</span>
+            <input type="text" name="guardDefensiveTicker" value="BIL" />
           </label>
           <label>
-            <span>End date</span>
-            <input type="date" name="endDate" value="2024-12-31" required />
+            <span>이동평균 기간</span>
+            <input type="number" name="guardSmaWindow" value="200" min="2" max="500" />
+          </label>
+          <label>
+            <span>RSI 기간</span>
+            <input type="number" name="guardRsiPeriod" value="14" min="2" max="200" />
+          </label>
+          <label>
+            <span>RSI 상단</span>
+            <input type="number" name="guardRsiUpper" value="70" min="1" max="99" step="0.1" />
+          </label>
+          <label>
+            <span>위험자산 최대 비중 (%)</span>
+            <input type="number" name="guardRiskMaxWeightPct" value="60" min="0.1" max="100" step="0.1" />
           </label>
         </div>
-
-        <div id="period-lookback-fields" class="grid one hidden">
-          <label>
-            <span>Trailing years</span>
-            <input type="number" name="lookbackYears" value="5" min="0.25" max="50" step="0.25" />
-          </label>
-        </div>
-
+        </details>
+        <details class="advanced-settings"><summary>거래·배당 설정 <small>기본: 소수점 · 재투자</small></summary>
         <div class="grid three">
           <label class="checkbox-field">
-            <span>Allow fractional shares</span>
+            <span>소수점 매매 허용</span>
             <input type="checkbox" name="fractionalShares" checked />
           </label>
           <label class="checkbox-field">
-            <span>Auto reinvest dividends</span>
+            <span>배당금 재투자</span>
             <input type="checkbox" name="dividendReinvestment" checked />
           </label>
           <label>
-            <span>Fee rate (0~1)</span>
+            <span>매매 수수료 (0.001 = 0.1%)</span>
             <input type="number" name="feeRate" value="0" min="0" max="1" step="0.0001" />
           </label>
           <label>
-            <span>Slippage rate (0~1)</span>
+            <span>체결 가격 오차 (0.001 = 0.1%)</span>
             <input type="number" name="slippageRate" value="0" min="0" max="1" step="0.0001" />
           </label>
           <label>
@@ -170,18 +199,21 @@
           </label>
         </div>
 
+        </details>
+        <p class="method-note">종가 기준 가상 실험 · 모든 금액은 USD · 과거 성과는 미래 수익을 보장하지 않습니다.</p>
         <div class="form-actions">
-          <button id="submit-btn" type="submit" class="primary-btn">Run Backtest</button>
-          <p id="status-text" class="status-text"></p>
+          <button id="submit-btn" type="submit" class="primary-btn">분석하기</button>
+          <button id="benchmark-btn" type="button" class="secondary-btn single-only">S&amp;P 500 ETF와 비교</button>
+          <p id="status-text" class="status-text" role="status"></p>
         </div>
       </form>
     </section>
 
-    <section class="panel result-panel">
+    <section class="panel result-panel" id="results">
       <div class="panel-header">
         <div>
-          <h2>Results</h2>
-          <p id="results-hint">Review summary metrics, the equity curve, and the executed rebalance events.</p>
+          <h2>성과 대시보드 <span class="result-badge" id="result-badge">분석 전</span></h2>
+          <p id="results-hint">왼쪽에서 조건을 정하고 분석하면 성과와 구성을 함께 볼 수 있습니다.</p>
         </div>
         <label id="scenario-detail-label" class="scenario-detail-label hidden">
           <span>상세 보기 시나리오</span>
@@ -189,10 +221,70 @@
         </label>
       </div>
 
-      <div id="summary-grid" class="summary-grid empty-state">
-        Run a backtest to populate the result cards.
+      <div class="context-row"><p id="result-context" class="result-context" aria-live="polite">실제 거래 기간과 납입금은 분석 후 표시됩니다.</p><a class="help-link" href="#measurement-guide">계산 기준 ↗</a></div>
+      <div id="summary-grid" class="summary-grid"><article class="metric-card"><span>최종 평가금액</span><strong>—</strong><small>분석 후 표시</small></article><article class="metric-card"><span>투자 손익</span><strong>—</strong><small>분석 후 표시</small></article><article class="metric-card"><span>연환산 수익률</span><strong>—</strong><small>분석 후 표시</small></article><article class="metric-card"><span>최대 낙폭</span><strong>—</strong><small>분석 후 표시</small></article><article class="metric-card"><span>총 납입금</span><strong>—</strong><small>분석 후 표시</small></article><article class="metric-card"><span>납입 대비 수익률</span><strong>—</strong><small>분석 후 표시</small></article></div>
+      <details id="summary-details" class="summary-details hidden"><summary>수익률·비용 상세</summary><div id="summary-details-body"></div></details>
+
+
+
+      <div class="result-board">
+      <div class="chart-card equity-card">
+        <div class="chart-header">
+          <h3>자산 추이</h3>
+          <div class="chart-meta">
+            <div class="chart-mode-toggle" role="group" aria-label="Chart mode">
+              <button type="button" class="chart-mode-btn active" data-chart-mode="nominal" aria-pressed="true">평가금액</button>
+              <button type="button" class="chart-mode-btn" data-chart-mode="real" aria-pressed="false">물가 조정</button>
+            </div>
+            <span id="chart-range"></span>
+          </div>
+        </div>
+        <p id="chart-note" class="chart-note">추가 납입금을 포함한 평가금액입니다.</p>
+        <p class="method-note">세로축: 미국 달러 · K = 천, M = 백만 / 가로축: 거래일 순서</p>
+        <div id="chart-legend" class="chart-legend hidden" aria-hidden="true"></div>
+        <canvas role="img" aria-label="포트폴리오 평가금액 추이. 주요 수치는 위 요약에 표시됩니다." id="equity-chart" width="960" height="360"></canvas>
       </div>
 
+<aside id="final-allocation" class="final-allocation"><h3>종료일 자산 구성</h3><div class="allocation-placeholder"><span>분석 대기</span></div><p class="method-note">실제 계산 결과의 종목 비중과 잔여 현금을 표시합니다.</p></aside>
+      <div class="tables">
+        <div class="table-card">
+          <h3>종료일 보유 내역 <span class="card-tag">가상 보유</span></h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>종목</th>
+                  <th>보유 수량</th>
+                  <th>평가금액</th>
+                  <th>비중</th>
+                </tr>
+              </thead>
+              <tbody id="holdings-body">
+                <tr><td colspan="4" class="empty-row">분석 후 보유 내역이 표시됩니다.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="table-card">
+          <h3>거래·자금 기록</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>날짜</th>
+                  <th>사유</th>
+                  <th>거래 비중</th>
+                </tr>
+              </thead>
+              <tbody id="events-body">
+                <tr><td colspan="3" class="empty-row">분석 후 거래 내역이 표시됩니다.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      </div>
       <div id="compare-summary-wrap" class="compare-summary-wrap hidden">
         <h3 class="compare-summary-title">시나리오 요약 비교</h3>
         <div class="table-wrap">
@@ -203,79 +295,174 @@
         </div>
       </div>
 
-      <div class="chart-card">
-        <div class="chart-header">
-          <h3>Equity Curve</h3>
-          <div class="chart-meta">
-            <div class="chart-mode-toggle" role="group" aria-label="Chart mode">
-              <button type="button" class="chart-mode-btn active" data-chart-mode="nominal" aria-pressed="true">Nominal</button>
-              <button type="button" class="chart-mode-btn" data-chart-mode="real" aria-pressed="false">Real</button>
-            </div>
-            <span id="chart-range"></span>
-          </div>
-        </div>
-        <p id="chart-note" class="chart-note">Nominal portfolio value.</p>
-        <div id="chart-legend" class="chart-legend hidden" aria-hidden="true"></div>
-        <canvas id="equity-chart" width="960" height="360"></canvas>
-      </div>
-
-      <div class="tables">
-        <div class="table-card">
-          <h3>Final Holdings</h3>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Ticker</th>
-                  <th>Shares</th>
-                  <th>Value</th>
-                  <th>Weight</th>
-                </tr>
-              </thead>
-              <tbody id="holdings-body">
-                <tr><td colspan="4" class="empty-row">Run a backtest to see final holdings.</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="table-card">
-          <h3>Rebalance Events</h3>
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Reason</th>
-                  <th>Turnover</th>
-                </tr>
-              </thead>
-              <tbody id="events-body">
-                <tr><td colspan="3" class="empty-row">Run a backtest to see executed events.</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
     </section>
+    </div>
+    <details class="panel help-panel" id="getting-started">
+      <summary>처음이라면 · 3단계로 시작하기</summary>
+      <ol class="help-steps">
+        <li><strong>종목과 비중을 정하세요.</strong> 종목 코드는 주식의 짧은 이름입니다. AAPL은 애플, MSFT는 마이크로소프트입니다. 비중 40%는 투자금 100달러 중 40달러를 배분한다는 뜻이며, 합계는 100%여야 합니다. 기본 종목은 사용 예시입니다.</li>
+        <li><strong>투자금과 과거 기간을 입력하세요.</strong> 시작 투자금 1,000, 매월 추가 투자금 100을 입력하면 첫 투자 후 다음 달부터 매월 첫 거래일에 100달러씩 추가합니다. 처음에는 접힌 옵션의 기본값으로 시작해도 됩니다.</li>
+        <li><strong>분석한 뒤 같은 조건으로 비교하세요.</strong> ‘분석하기’로 내 조합을 확인하고 ‘S&amp;P 500 ETF와 비교’로 SPY와 비교합니다. 수익률과 최대 낙폭을 함께 확인하세요. 입력을 바꾼 뒤에는 다시 실행해야 합니다.</li>
+      </ol>
+      <p class="method-note">백테스트는 과거 시세로 ‘그때 투자했다면’을 계산하는 가상 실험입니다. 계좌 연결이나 실제 주문 없이 사용할 수 있습니다.</p>
+    </details>
+
+      <details class="panel help-panel" id="measurement-guide">
+        <summary>이 숫자는 어떻게 계산하나요?</summary>
+        <p>화면의 금액은 모두 미국 달러(USD)입니다. 계산은 Yahoo Finance의 일별 종가와 배당 데이터를 사용하며, 실제로 사용한 첫 거래일과 마지막 거래일을 결과에 표시합니다.</p>
+        <dl class="metric-guide">
+          <dt>총 납입금 · 내가 넣은 돈</dt><dd>시작 투자금 + 실제 추가 납입액의 합계입니다. 시작한 달에는 월 추가금을 별도로 넣지 않습니다. 예: 시작 1,000달러 + 이후 3회 × 100달러 = 1,300달러.</dd>
+          <dt>최종 평가금액 · 종료일에 남은 자산</dt><dd>각 종목의 보유 수량 × 종료일 종가를 더하고 남은 현금을 합합니다. 배당, 설정한 세금·수수료·추가 보수의 효과가 반영됩니다. 실제 계좌 잔액은 아닙니다.</dd>
+          <dt>투자 손익 · 넣은 돈보다 얼마나 늘었나요?</dt><dd>최종 평가금액 − 총 납입금입니다. 총 1,300달러를 넣고 1,430달러가 되었다면 손익은 +130달러, 납입 대비 수익률은 130 ÷ 1,300 × 100 = 10%입니다. 이 10%는 연 수익률이 아닙니다.</dd>
+          <dt>연환산 수익률 · XIRR</dt><dd>돈을 넣은 날짜와 금액, 마지막 평가금액을 함께 사용해 1년 기준 수익률을 구합니다. 납입액을 음수, 마지막 평가금액을 양수로 놓고 각 금액을 (1 + 연 수익률)의 경과 연수만큼 할인했을 때 합계가 0이 되는 수익률입니다. 경과 연수는 일수 ÷ 365.25입니다. 계산 가능한 값을 찾지 못하면 ‘계산 불가’로 표시합니다.</dd>
+          <dt>연평균 성장률 · CAGR</dt><dd>추가 납입이 없을 때만 계산합니다. [(최종 평가금액 ÷ 시작 투자금)의 (1 ÷ 경과 연수) 제곱 − 1] × 100입니다. 예: 2년 동안 1,000달러가 1,210달러가 되면 연평균 10%입니다.</dd>
+          <dt>최대 낙폭 · MDD</dt><dd>추가 납입으로 자산이 늘어난 효과를 제거한 수익 지수에서, 이전 최고점 대비 가장 크게 하락한 비율입니다. 지수가 100 → 120 → 90이었다면 90 ÷ 120 − 1 = −25%입니다. 실제 손익이나 앞으로 잃을 수 있는 최대 금액을 뜻하지는 않습니다.</dd>
+          <dt>자산 추이 · 평가금액과 물가 조정</dt><dd>평가금액 그래프에는 추가 납입금도 포함되므로 선이 올랐다고 전부 수익은 아닙니다. ‘물가 조정’은 연 3%의 물가상승을 가정하여 평가금액을 1.03의 경과 연수 제곱으로 나눈 값입니다. 실제 물가 통계를 가져온 값은 아닙니다.</dd>
+          <dt>S&amp;P 500 ETF 비교 · 비교 기준</dt><dd>SPY 100%를 동일한 기간·시작 투자금·추가 납입금·거래 조건으로 계산합니다. SPY에는 연간 정기 리밸런싱과 추가 보수 0을 적용합니다. ETF의 결과이므로 지수 자체와는 다를 수 있습니다. 실제 거래일이 다르면 기간을 맞춘 뒤 다시 실행하세요.</dd>
+        </dl>
+        <p class="method-note">추가 연 보수(TER)는 보유 평가액 × 입력한 연 보수율 ÷ 252를 매 거래일 차감합니다. 시세에 보수가 이미 반영된 ETF에 추가하면 중복 비용이 될 수 있어 기본값은 0입니다. 배당세 기본값도 0이며 실제 세후 수익을 자동으로 재현하지 않습니다.</p>
+      </details>
+    <details class="panel risk-panel" id="risk-analysis"><summary>더 알아보기 · 두 종목의 수익과 위험</summary>
+      <div class="panel-header">
+        <div>
+          <h2>두 종목 수익·위험 분석</h2>
+          <p>초기 비중으로 매수·보유했을 때의 수익, 변동성, 낙폭을 비교합니다. 위 백테스트의 거래 설정은 적용하지 않습니다.</p>
+        </div>
+      </div>
+
+      <details class="advanced-settings help-panel">
+        <summary>변동성·상관계수·지수 읽는 법</summary>
+        <p><strong>변동성</strong>은 하루 수익률이 얼마나 흔들렸는지입니다. 일간 수익률의 표본 표준편차 × √252 × 100으로 연환산합니다. 수익률이나 최대 손실액과는 다른 지표입니다.</p>
+        <p><strong>상관계수</strong>는 두 종목의 일간 수익률이 함께 움직인 정도입니다. +1에 가까우면 같은 방향, −1에 가까우면 반대 방향으로 움직였습니다. 0 근처라고 위험이 없다는 뜻은 아니며, 변화가 없어 계산할 수 없으면 ‘-’로 표시합니다.</p>
+        <p><strong>총수익 지수</strong>는 시작값을 100으로 두고 매일 (당일 종가 + 주당 배당) ÷ 전일 종가를 곱합니다. 120이면 시작 대비 +20%입니다. 포트폴리오 지수는 두 지수를 초기 비중으로 합합니다. 이 별도 분석에는 추가 납입·리밸런싱·세금·거래비용을 적용하지 않습니다.</p>
+      </details>
+
+      <form id="risk-profile-form">
+        <div class="grid three">
+          <label>
+            <span>종목 A</span>
+            <input type="text" name="riskTickerA" value="AAPL" required />
+          </label>
+          <label>
+            <span>종목 B</span>
+            <input type="text" name="riskTickerB" value="MSFT" required />
+          </label>
+          <label>
+            <span>종목 A 비중 (%)</span>
+            <input type="number" name="riskWeightA" value="60" min="0" max="100" step="0.1" required />
+          </label>
+        </div>
+
+        <div class="grid three">
+          <label>
+            <span>종목 B 비중 (%)</span>
+            <input type="number" name="riskWeightB" value="40" min="0" max="100" step="0.1" required />
+          </label>
+          <label>
+            <span>투자 기간</span>
+            <select id="risk-period-mode" name="riskPeriodMode">
+              <option value="range">날짜 직접 선택</option>
+              <option value="lookback">최근 N년</option>
+            </select>
+          </label>
+          <div></div>
+        </div>
+
+        <div id="risk-period-range-fields" class="grid two">
+          <label>
+            <span>시작일</span>
+            <input type="date" name="riskStartDate" value="2020-01-01" required />
+          </label>
+          <label>
+            <span>종료일</span>
+            <input type="date" name="riskEndDate" value="2024-12-31" required />
+          </label>
+        </div>
+
+        <div id="risk-period-lookback-fields" class="grid one hidden">
+          <label>
+            <span>최근 몇 년</span>
+            <input type="number" name="riskLookbackYears" value="5" min="0.25" max="50" step="0.25" />
+          </label>
+        </div>
+
+        <div class="form-actions">
+          <button id="risk-submit-btn" type="submit" class="primary-btn">수익·위험 분석하기</button>
+          <p id="risk-status-text" class="status-text" role="status"></p>
+        </div>
+      </form>
+
+      <div id="risk-summary-grid" class="summary-grid empty-state">
+        두 종목과 비중을 정한 뒤 분석을 시작하세요.
+      </div>
+
+      <div id="risk-metrics-wrap" class="table-card hidden">
+        <h3>수익·위험 지표</h3>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>종목</th>
+                <th>누적 수익률</th>
+                <th>연환산 수익률</th>
+                <th>연환산 변동성</th>
+                <th>MDD</th>
+              </tr>
+            </thead>
+            <tbody id="risk-metrics-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="risk-charts">
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>비중별 수익과 낙폭</h3>
+            <span id="risk-allocation-range"></span>
+          </div>
+          <p class="chart-note">각 점은 10:0부터 0:10까지의 비중입니다. 가로축은 최대 낙폭, 세로축은 누적 수익률입니다.</p>
+          <div id="risk-allocation-legend" class="chart-legend hidden" aria-hidden="true"></div>
+          <canvas id="risk-allocation-chart" width="520" height="320"></canvas>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>변동성과 수익률</h3>
+            <span id="risk-scatter-range"></span>
+          </div>
+          <p class="chart-note">가로축은 연환산 변동성, 세로축은 연환산 수익률입니다.</p>
+          <canvas id="risk-scatter-chart" width="520" height="320"></canvas>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-header">
+            <h3>배당 재투자 총수익 지수</h3>
+            <span id="risk-normalized-range"></span>
+          </div>
+          <p class="chart-note">시작값 100 · 배당 재투자 · 초기 비중 매수 후 보유 (리밸런싱 없음)</p>
+          <div id="risk-chart-legend" class="chart-legend hidden" aria-hidden="true"></div>
+          <canvas id="risk-normalized-chart" width="520" height="320"></canvas>
+        </div>
+      </div>
+    </details>
   </main>
 
   <!-- 수정: 2026-04-24 — 포지션별 연 TER(소수). 예: 0.0003 = 연 0.03% -->
   <template id="position-template">
     <div class="position-row">
       <label>
-        <span>Ticker</span>
+        <span>종목</span>
         <input type="text" name="ticker" placeholder="AAPL" required />
       </label>
       <label>
-        <span>Target Weight (%)</span>
+        <span>비중 (%)</span>
         <input type="number" name="targetWeight" min="0.01" max="100" step="0.01" required />
       </label>
-      <label>
+      <details class="ter-setting"><summary>보수</summary><label>
         <span>연 TER (소수)</span>
         <input type="number" name="annualExpenseRatio" value="0" min="0" max="0.05" step="0.0001" title="예: 0.0003 = 연 0.03%. 야후 가격에 보수가 이미 반영됐을 수 있어 이중 계산 주의." />
       </label>
-      <button type="button" class="danger-btn remove-position-btn">Remove</button>
+      </details><button type="button" class="danger-btn remove-position-btn" aria-label="종목 삭제">×</button>
     </div>
   </template>
 
@@ -289,23 +476,24 @@
         </label>
         <button type="button" class="danger-btn remove-scenario-btn">시나리오 삭제</button>
       </div>
-      <div class="scenario-positions positions"></div>
+      <div class="scenario-positions positions"></div><div class="allocation-preview" aria-live="polite"></div>
       <button type="button" class="secondary-btn add-scenario-position-btn">티커 추가</button>
-      <div class="grid two scenario-rebalance-row">
+      <details class="advanced-settings"><summary>리밸런싱 설정</summary><div class="grid two scenario-rebalance-row">
         <label>
-          <span>Rebalance mode</span>
+          <span>리밸런싱 방식</span>
           <select class="scenario-rebalance-mode">
-            <option value="calendar">Calendar Rebalance</option>
-            <option value="rsi">RSI Rebalance</option>
-            <option value="band">Band (drift) Rebalance</option>
+            <option value="calendar">정기 리밸런싱</option>
+            <option value="rsi">RSI 신호</option>
+            <option value="band">비중 이탈 밴드</option>
+            <option value="etf_guard">ETF Guard</option>
           </select>
         </label>
         <label class="scenario-frequency-field">
-          <span>Calendar frequency</span>
+          <span>조정 주기</span>
           <select class="scenario-frequency">
-            <option value="monthly">Monthly</option>
-            <option value="quarterly">Quarterly</option>
-            <option value="yearly">Yearly</option>
+            <option value="monthly">매월</option>
+            <option value="quarterly">분기마다</option>
+            <option value="yearly">매년</option>
           </select>
         </label>
       </div>
@@ -315,31 +503,62 @@
       </label>
       <div class="grid three scenario-rsi-fields hidden">
         <label>
-          <span>RSI period</span>
+          <span>RSI 기간</span>
           <input type="number" class="scenario-rsi-period" value="14" min="2" max="200" />
         </label>
         <label>
-          <span>Lower threshold</span>
+          <span>하단 기준</span>
           <input type="number" class="scenario-rsi-lower" value="30" min="1" max="99" step="0.1" />
         </label>
         <label>
-          <span>Upper threshold</span>
+          <span>상단 기준</span>
           <input type="number" class="scenario-rsi-upper" value="70" min="1" max="99" step="0.1" />
         </label>
       </div>
       <div class="grid two scenario-rsi-scope-fields hidden">
         <label>
-          <span>RSI signal scope</span>
+          <span>신호 확인 범위</span>
           <select class="scenario-rsi-signal-scope">
-            <option value="all">All portfolio tickers</option>
-            <option value="single">Selected ticker only</option>
+            <option value="all">모든 종목</option>
+            <option value="single">지정한 종목</option>
           </select>
         </label>
         <label class="scenario-rsi-trigger-field hidden">
-          <span>RSI trigger ticker</span>
+          <span>신호 확인 종목</span>
           <select class="scenario-rsi-trigger-ticker"></select>
         </label>
       </div>
+      <div class="grid three scenario-guard-fields hidden">
+        <label>
+          <span>위험자산 ETF</span>
+          <input type="text" class="scenario-guard-risk-ticker" value="TQQQ" />
+        </label>
+        <label>
+          <span>핵심 ETF</span>
+          <input type="text" class="scenario-guard-core-ticker" value="SCHD" />
+        </label>
+        <label>
+          <span>방어 ETF</span>
+          <input type="text" class="scenario-guard-defensive-ticker" value="BIL" />
+        </label>
+        <label>
+          <span>이동평균 기간</span>
+          <input type="number" class="scenario-guard-sma-window" value="200" min="2" max="500" />
+        </label>
+        <label>
+          <span>RSI 기간</span>
+          <input type="number" class="scenario-guard-rsi-period" value="14" min="2" max="200" />
+        </label>
+        <label>
+          <span>RSI 상단</span>
+          <input type="number" class="scenario-guard-rsi-upper" value="70" min="1" max="99" step="0.1" />
+        </label>
+        <label>
+          <span>위험자산 최대 비중 (%)</span>
+          <input type="number" class="scenario-guard-risk-max-weight" value="60" min="0.1" max="100" step="0.1" />
+        </label>
+      </div>
+      </details>
     </div>
   </template>
 
