@@ -1,5 +1,9 @@
 # Portfolio Dashboard
 
+운영 주소: https://autotrading-nu.vercel.app (Vercel 프로젝트 `beomseodev-9006s-projects/autotrading`). GitHub `beomseodev/autoTrading`의 `main` 변경을 자동 배포합니다.
+
+Google Cloud 프로젝트는 `autotrading-512408`이며 OAuth 콜백은 `http://localhost:8000/auth/callback`과 `https://autotrading-nu.vercel.app/auth/callback`입니다. 운영 환경변수는 Vercel에서 관리하고, 로컬 `.env`와 인증용 CLI 파일은 Git/배포에서 제외합니다. Toss 키는 아직 연결되지 않았습니다.
+
 FastAPI 기반 개인 투자 대시보드입니다. 메인은 실제로 입력한 보유 자산과 시장·거시경제·목표 계획을 보여주며, 과거 전략 비교는 별도 포트폴리오 실험실에서 제공합니다.
 
 ## 메인 대시보드
