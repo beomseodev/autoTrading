@@ -27,7 +27,7 @@ oauth.register(
 def configured() -> bool:
     return all(os.getenv(key) for key in (
         "APP_BASE_URL", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET",
-        "GOOGLE_OWNER_EMAIL", "SESSION_SECRET",
+        "SESSION_SECRET",
     )) and len(os.getenv("SESSION_SECRET", "")) >= 32
 
 
@@ -37,13 +37,36 @@ def is_owner(user: dict | None) -> bool:
                 (not os.getenv("GOOGLE_OWNER_SUB") or user["sub"] == os.environ["GOOGLE_OWNER_SUB"]))
 
 
+def is_authenticated(user: dict | None) -> bool:
+    return bool(configured() and isinstance(user, dict) and
+                isinstance(user.get("sub"), str) and user["sub"] and
+                isinstance(user.get("email"), str) and user["email"])
+
+
 def install_auth(app):
+    public_api = {
+        ("GET", "/api/dashboard/markets"), ("GET", "/api/dashboard/symbols"),
+        ("POST", "/api/dashboard/portfolio"), ("POST", "/api/dashboard/goal"),
+        ("POST", "/api/backtests"), ("POST", "/api/backtests/compare"),
+        ("POST", "/api/risk-profile"),
+    }
+
     @app.middleware("http")
     async def protect(request: Request, call_next):
-        private = request.url.path.startswith("/api/") or request.url.path in ("/", "/lab", "/docs", "/redoc", "/openapi.json")
-        if private and not is_owner(request.session.get("user")):
+        cron = request.url.path == "/api/cron/rebalance"
+        cron_secret = os.getenv("CRON_SECRET", "")
+        user = request.session.get("user")
+        authenticated = is_authenticated(user)
+        private = ((request.url.path.startswith("/api/") and (request.method, request.url.path) not in public_api)
+                   or request.url.path in ("/docs", "/redoc", "/openapi.json"))
+        if cron and (not cron_secret or not secrets.compare_digest(
+                request.headers.get("authorization", "").encode(), ("Bearer " + cron_secret).encode())):
+            response = JSONResponse({"detail": "예약 점검 인증이 필요합니다."}, status_code=401)
+        elif private and not cron and not authenticated:
             response = (JSONResponse({"detail": "로그인이 필요합니다."}, status_code=401)
                         if request.url.path.startswith("/api/") else RedirectResponse("/login", status_code=303))
+        elif request.url.path.startswith("/api/") and not cron and request.headers.get("x-portfolio-account") is not None and request.headers["x-portfolio-account"] != (user["sub"] if authenticated else None):
+            response = JSONResponse({"detail": "로그인 계정이 변경되었습니다. 새로고침해주세요."}, status_code=409)
         elif request.method not in ("GET", "HEAD", "OPTIONS") and request.headers.get("origin") != os.getenv("APP_BASE_URL", "").rstrip("/"):
             response = JSONResponse({"detail": "요청 출처를 확인할 수 없습니다."}, status_code=403)
         else:
@@ -61,7 +84,8 @@ def install_auth(app):
 @router.get("/session")
 def session(request: Request):
     user = request.session.get("user")
-    return {"configured": configured(), "user": user if is_owner(user) else None}
+    return {"configured": configured(), "user": user if is_authenticated(user) else None,
+            "isOwner": is_owner(user)}
 
 
 @router.get("/login")
@@ -87,9 +111,9 @@ async def callback(request: Request):
         token = await oauth.google.authorize_access_token(request)
         claims = token.get("userinfo", {})
         user = {"sub": claims.get("sub"), "email": claims.get("email", "")}
-        if claims.get("email_verified") is not True or not is_owner(user):
+        if claims.get("email_verified") is not True or not is_authenticated(user):
             request.session.clear()
-            raise HTTPException(403, "허용된 본인 Google 계정으로 로그인해주세요.")
+            raise HTTPException(403, "이메일이 인증된 Google 계정으로 로그인해주세요.")
     except (AuthlibBaseError, JoseError, ValueError):
         request.session.clear()
         raise HTTPException(400, "로그인 검증에 실패했습니다. 다시 로그인해주세요.") from None
@@ -104,4 +128,4 @@ async def callback(request: Request):
 @router.post("/logout")
 def logout(request: Request):
     request.session.clear()
-    return RedirectResponse("/login", status_code=303)
+    return RedirectResponse("/", status_code=303)

@@ -118,6 +118,8 @@ dialog::backdrop { background:#152c394d; backdrop-filter:blur(2px); }
 .editor-labels,.owned-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1fr) 28px; gap:9px; }
 .editor-labels { font-size:10px; color:var(--muted); margin-bottom:6px; }
 .owned-row { margin-bottom:9px; }
+.symbol-results { display:grid; gap:6px; margin-bottom:14px; }
+.symbol-results button { text-align:left; white-space:normal; }
 input,select { width:100%; min-width:0; padding:9px 10px; border:1px solid #dfe6eb; border-radius:6px; color:var(--ink); background:white; }
 .remove-owned { border:0; background:#fcf0ef; color:var(--negative); border-radius:5px; font-size:18px; }
 .add-row { margin:3px 0 20px; }
@@ -135,3 +137,9 @@ input,select { width:100%; min-width:0; padding:9px 10px; border:1px solid #dfe6
 .login-panel { width: min(var(--login-panel-width), calc(100% - 32px)); margin: 15vh auto; padding: 32px; }
 .login-panel p { margin: 20px 0; }
 .account-actions { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+.editor-labels,.owned-row { grid-template-columns:minmax(0,1.3fr) repeat(3,minmax(0,1fr)) 28px; }
+.field-grid .check-field { display:flex; align-items:center; gap:8px; }
+.check-field input { width:18px; min-height:18px; }
+#rebalance-status { margin-bottom:12px; }
+[hidden] { display:none !important; }
+@media(max-width:680px) { .editor-labels { display:none; } .owned-row { grid-template-columns:1fr 1fr; padding-bottom:12px; border-bottom:1px solid var(--line); } .owned-row .remove-owned { grid-column:2; justify-self:end; width:32px; } }

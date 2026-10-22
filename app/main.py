@@ -7,9 +7,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from app.auth import install_auth
-from app.services.toss import TossService, TossError
+from app.dashboard_state import router as state_router
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -28,6 +28,8 @@ from app.services.risk_profile import RiskProfileService
 from app.dashboard_schemas import PortfolioSnapshotRequest, GoalProjectionRequest, GoalProjectionResponse
 from app.services.dashboard import DashboardService
 from app.services.goals import project_goal
+from app.services.symbol_search import search_symbols
+from time import time
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -36,19 +38,12 @@ STATIC_DIR = BASE_DIR / "static"
 app = FastAPI(title="Portfolio Dashboard", version="0.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 install_auth(app)
+app.include_router(state_router)
 
 
 @app.get("/login")
 def login_page() -> FileResponse:
     return FileResponse(STATIC_DIR / "login.html")
-
-
-@app.get("/api/toss/holdings")
-def toss_holdings() -> dict:
-    try:
-        return TossService().holdings()
-    except TossError as exc:
-        raise HTTPException(exc.status, str(exc)) from None
 
 
 def get_backtest_service() -> BacktestService:
@@ -82,6 +77,17 @@ def dashboard_markets(service: DashboardService = Depends(get_dashboard_service)
 @app.post("/api/dashboard/portfolio")
 def dashboard_portfolio(payload: PortfolioSnapshotRequest, service: DashboardService = Depends(get_dashboard_service)) -> dict:
     return service.portfolio_snapshot(payload)
+
+
+@app.get("/api/dashboard/symbols")
+def dashboard_symbols(q: str = Query(min_length=1, max_length=80)) -> dict:
+    query = q.strip()
+    if not query:
+        raise HTTPException(422, "검색어를 입력해주세요.")
+    try:
+        return {"items": search_symbols(query, int(time() // 300))}
+    except Exception:
+        raise HTTPException(502, "종목 검색에 실패했습니다. 잠시 후 다시 시도해주세요.") from None
 
 
 @app.post("/api/dashboard/goal", response_model=GoalProjectionResponse)

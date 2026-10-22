@@ -19,7 +19,7 @@
       <div class="nav-divider"></div>
       <a href="/lab"><span aria-hidden="true">⌁</span> 포트폴리오 실험실 <span class="external">↗</span></a>
     </nav>
-    <div class="sidebar-note"><span class="local-dot"></span> 나만의 투자 공간<p>보유 정보와 목표 설정은<br>현재 브라우저에 저장됩니다.<br>사이트 데이터 삭제 시 지워집니다.</p></div>
+    <div class="sidebar-note"><span class="local-dot"></span> 나만의 투자 공간<p>로그인 없이 살펴볼 수 있습니다.<br>자산·목표를 저장하려면<br>Google로 로그인해주세요.</p></div>
   </aside>
 
   <main class="workspace">
@@ -28,7 +28,9 @@
       <div class="header-actions"><span id="updated-at">시세 확인 중</span><button id="refresh-btn" class="button quiet" type="button">↻ 새로고침</button><button class="button primary" data-edit-portfolio type="button">보유 자산 편집</button></div>
     </header>
     <p id="app-status" class="app-status" role="status"></p>
-    <div class="account-actions"><span id="signed-in-user"></span><form action="/auth/logout" method="post"><button class="button quiet" type="submit">로그아웃</button></form></div>
+    <p id="cloud-status" class="card-note" role="status">저장된 포트폴리오를 확인하고 있습니다.</p>
+    <button id="sync-local-btn" class="button quiet" type="button" hidden>이 브라우저의 자산·목표를 계정에 저장</button>
+    <div class="account-actions"><span id="signed-in-user"></span><a id="login-link" class="button quiet" href="/login">Google로 로그인</a><form id="logout-form" action="/auth/logout" method="post" hidden><button class="button quiet" type="submit">로그아웃</button></form></div>
 
     <section id="market-strip" class="market-strip" aria-label="시장 지표" aria-busy="true">
       <article class="market-item"><span>S&amp;P 500</span><strong>—</strong><small>불러오는 중</small></article>
@@ -61,11 +63,12 @@
         <p class="card-note">시세는 5분, 거시는 30분 캐시합니다. 수치는 각 관측일 기준입니다. 증감은 직전 유효 관측 대비 %p이며 지표마다 공표 주기가 다릅니다.</p>
       </section>
 
-      <section class="card holdings-card" id="toss-holdings" aria-labelledby="toss-title">
-        <div class="card-header"><div><h2 id="toss-title">Toss 계좌 보유 종목</h2><p class="muted">계좌에서 직접 조회 · 국내·미국 주식 · 읽기 전용</p></div><button id="load-toss" class="button primary" type="button">Toss 계좌 조회</button></div>
-        <p id="toss-status" class="card-note" role="status">조회 버튼을 누르면 현재 보유 종목을 가져옵니다.</p>
-        <div class="table-scroll"><table><thead><tr><th>계좌·종목</th><th class="number">수량</th><th class="number">평균 매입가</th><th class="number">평가금액</th><th class="number">평가손익</th></tr></thead><tbody id="toss-body"></tbody></table></div>
-        <p class="card-note">현금·타 증권사 자산은 포함하지 않습니다. 아래 수동 입력 및 상단 자산 합계·목표 계산과 별도로 표시합니다.</p>
+      <section class="card holdings-card" id="rebalance" aria-labelledby="rebalance-title">
+        <div class="card-header"><div><h2 id="rebalance-title">리밸런싱 점검</h2><p class="muted">목표 비중과 실제 비중 비교 · 현금 포함</p></div><button class="text-button" data-edit-portfolio type="button">목표 비중 설정 ↗</button></div>
+        <p id="rebalance-status" role="status">보유 자산과 목표 비중을 입력해주세요.</p>
+        <div class="table-scroll"><table><thead><tr><th>자산</th><th class="number">현재 비중</th><th class="number">목표 비중</th><th class="number">차이 (%p)</th><th class="number">목표까지 조정금액</th></tr></thead><tbody id="rebalance-body"></tbody></table></div>
+        <p id="email-status" class="card-note" role="status"></p><button id="test-email-btn" class="button quiet" type="button" disabled>본인에게 테스트 메일 보내기</button>
+        <p class="card-note">이메일 알림을 켜면 오전 10시대에 하루 한 번 점검하고, 허용폭 초과 시 알립니다. 같은 시세 기준일에는 발송을 한 번만 시도합니다. 시세 누락·오래된 가격은 점검을 보류합니다. 거래 후 수량을 직접 수정해주세요. 조정금액은 세금·수수료를 반영하지 않은 목표 차이입니다.</p>
       </section>
       <section class="card holdings-card" id="holdings" aria-labelledby="holdings-title">
         <div class="card-header"><div><h2 id="holdings-title">나의 포트폴리오</h2><p class="muted" id="holdings-description">미국 주식 · ETF / 직접 입력 / 가격·매입가는 USD</p></div><button class="text-button" data-edit-portfolio type="button">편집 ↗</button></div>
@@ -88,12 +91,17 @@
   <dialog id="portfolio-dialog" aria-labelledby="portfolio-dialog-title">
     <form id="portfolio-form">
       <div class="dialog-header"><div><p class="eyebrow">MY HOLDINGS</p><h2 id="portfolio-dialog-title">보유 자산 편집</h2></div><button class="close-button" type="button" data-close-dialog aria-label="닫기">×</button></div>
-      <p class="dialog-copy">미국 상장 종목의 현재 보유 수량과 주당 평균 매입가를 입력하세요. 실제 계좌 연동 없이 이 브라우저에 저장합니다.</p>
-      <div class="editor-labels"><span>종목 코드</span><span>보유 수량</span><span>평균 매입가 ($)</span><span></span></div>
+      <p class="dialog-copy">한국·미국 종목의 수량과 평균 매입가를 입력하세요. 한국은 원화, 미국은 달러 기준입니다. 코스피는 005930.KS, 코스닥은 247540.KQ처럼 입력하세요. 로그인한 계정만 저장할 수 있습니다.</p>
+      <label>종목명 또는 코드 검색<input id="symbol-query" type="search" maxlength="80" placeholder="삼성전자, 애플, AAPL" /></label>
+      <button type="button" class="button quiet" id="search-symbols">종목 검색</button>
+      <p id="symbol-search-status" class="form-status" role="status"></p>
+      <div id="symbol-results" class="symbol-results" aria-label="종목 검색 결과"></div>
+      <div class="editor-labels"><span>종목 코드</span><span>보유 수량</span><span>평균 매입가 (현지 통화)</span><span>목표 비중 (%)</span><span></span></div>
       <div id="owned-positions"></div>
       <button type="button" class="text-button add-row" id="add-owned-position">+ 종목 추가</button>
       <div class="field-grid"><label>원화 현금 (₩)<input type="number" name="cashKRW" min="0" max="1000000000000000" step="0.01" value="0" required /></label><label>달러 현금 ($)<input type="number" name="cashUSD" min="0" max="1000000000000" step="0.01" value="0" required /></label><label>대시보드 표시 통화<select name="baseCurrency"><option value="KRW">원화 (KRW)</option><option value="USD">달러 (USD)</option></select></label></div>
-      <p class="card-note">평가손익은 현재 보유분의 매입가 대비 차이이며, 매도 손익·과거 배당·취득 시점의 환차손익은 포함하지 않습니다.</p>
+      <div class="field-grid"><label>리밸런싱 허용폭 (%p)<input name="rebalanceTolerancePct" type="number" min="0.01" max="50" step="0.01" value="5" required /></label><label class="check-field"><input name="emailAlerts" type="checkbox" />허용폭 초과 시 이메일 알림 받기</label></div>
+      <p class="card-note">목표 비중의 합계는 100% 이하로 입력하며 나머지는 현금 목표 비중입니다. 목표 비중은 선택 입력이지만 이메일 알림에는 모든 종목의 목표가 필요합니다. 예: 목표 30%, 허용폭 5%p이면 25% 미만 또는 35% 초과 시 알립니다.</p>
       <p id="portfolio-form-status" class="form-status" role="status"></p>
       <div class="dialog-actions"><button type="button" class="button quiet" data-close-dialog>취소</button><button type="submit" class="button primary">저장하고 현황 보기</button></div>
     </form>
@@ -110,6 +118,6 @@
     </form>
   </dialog>
 
-  <template id="owned-position-template"><div class="owned-row"><label><span class="sr-only">종목 코드</span><input name="ticker" type="text" maxlength="10" pattern="[A-Za-z][A-Za-z0-9.\-]*" placeholder="예: AAPL" /></label><label><span class="sr-only">보유 수량</span><input name="quantity" type="number" min="0.000001" max="1000000000" step="any" placeholder="10" /></label><label><span class="sr-only">평균 매입가 USD</span><input name="averageCost" type="number" min="0" max="1000000000" step="any" placeholder="150" /></label><button type="button" class="remove-owned" aria-label="종목 삭제">×</button></div></template>
+  <template id="owned-position-template"><div class="owned-row"><label><span class="sr-only">종목 코드</span><input name="ticker" type="text" maxlength="10" pattern="([A-Za-z][A-Za-z0-9.\-]*|[0-9]{6}\.[Kk][SsQq])" placeholder="AAPL / 005930.KS" /></label><label><span class="sr-only">보유 수량</span><input name="quantity" type="number" min="0.000001" max="1000000000" step="any" placeholder="10" /></label><label><span class="sr-only">평균 매입가 (한국 KRW / 미국 USD)</span><input name="averageCost" type="number" min="0" max="1000000000" step="any" placeholder="150" /></label><label><span class="sr-only">목표 비중 (%)</span><input name="targetWeight" type="number" min="0" max="100" step="0.01" placeholder="목표 %" /></label><button type="button" class="remove-owned" aria-label="종목 삭제">×</button></div></template>
 </body>
 </html>

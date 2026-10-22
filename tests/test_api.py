@@ -49,6 +49,22 @@ def _minimal_backtest_json() -> dict:
     }
 
 
+def test_guest_can_run_backtests_comparisons_and_risk_analysis() -> None:
+    app.dependency_overrides[get_backtest_service] = lambda: BacktestService(FakeProvider())
+    app.dependency_overrides[get_risk_profile_service] = lambda: RiskProfileService(FakeProvider())
+    try:
+        client = TestClient(app)
+        client.cookies.clear()
+        request = _minimal_backtest_json()
+        assert client.post('/api/backtests', json=request).status_code == 200
+        assert client.post('/api/backtests/compare', json={'runs': [
+            {'label': 'First', 'request': request}, {'label': 'Second', 'request': request},
+        ]}).status_code == 200
+        assert client.post('/api/risk-profile', json={'tickers': ['AAA', 'BBB'], 'period': request['period']}).status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_compare_backtests_returns_expected_shape() -> None:
     app.dependency_overrides[get_backtest_service] = lambda: BacktestService(FakeProvider())
     client = TestClient(app)

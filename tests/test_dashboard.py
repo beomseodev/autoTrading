@@ -186,3 +186,66 @@ def test_dashboard_routes_and_lab_are_independent():
         assert result.status_code == 200 and len(result.json()['scenarios']) == 3
     finally:
         app.dependency_overrides.clear()
+
+
+def test_guest_can_search_value_holdings_and_project_goals_without_creating_session(monkeypatch):
+    monkeypatch.setattr('app.main.search_symbols', lambda query, bucket: [{'ticker': 'AAPL', 'name': 'Apple'}])
+    app.dependency_overrides[get_dashboard_service] = lambda: FakeDashboard()
+    try:
+        client = TestClient(app)
+        client.cookies.clear()
+        assert client.get('/').status_code == 200
+        assert client.get('/api/dashboard/markets').status_code == 200
+        assert client.get('/api/dashboard/symbols?q=Apple').json()['items'][0]['ticker'] == 'AAPL'
+        result = client.post('/api/dashboard/portfolio', json=holdings().model_dump())
+        assert result.status_code == 200 and result.json()['complete']
+        assert 'set-cookie' not in result.headers
+        result = client.post('/api/dashboard/goal', json=goal().model_dump())
+        assert result.status_code == 200 and len(result.json()['scenarios']) == 3
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize("base, expected, profit, daily", [
+    ("KRW", 2_940_000, 728_000, 340_000),
+    ("USD", 2100, 520, 2100 - (1900 + 130000 / 1300)),
+])
+def test_korean_and_us_positions_use_their_own_currency(base, expected, profit, daily):
+    class Korean(FakeDashboard):
+        def get_quote(self, symbol):
+            item = super().get_quote(symbol)
+            if symbol.endswith((".KS", ".KQ")):
+                item.update(value=70000, previous=65000, currency="KRW")
+            return item
+    result = Korean().portfolio_snapshot(holdings(
+        positions=[{"ticker": "AAPL", "quantity": 10, "averageCost": 150},
+                   {"ticker": "005930.ks", "quantity": 1, "averageCost": 56000},
+                   {"ticker": "247540.KQ", "quantity": 1, "averageCost": 56000}],
+        cashKRW=0, cashUSD=0, baseCurrency=base))
+    assert result["complete"]
+    assert result["totalValue"] == pytest.approx(expected)
+    assert result["unrealizedProfit"] == pytest.approx(profit)
+    assert result["dayChange"] == pytest.approx(daily)
+    assert result["holdings"][1]["currency"] == "KRW"
+    assert result["holdings"][1]["ticker"] == "005930.KS"
+
+
+def test_korean_only_valuation_does_not_require_fx():
+    class Korean(DashboardService):
+        def get_quote(self, symbol):
+            if symbol == "KRW=X":
+                raise ValueError("missing fx")
+            return {"value": 70000, "previous": 65000, "currency": "KRW",
+                    "asOf": "2026-10-21", "previousAsOf": "2026-10-20"}
+    request = holdings(positions=[{"ticker": "005930.KS", "quantity": 2, "averageCost": 60000}], cashKRW=100, cashUSD=0)
+    result = Korean().portfolio_snapshot(request)
+    assert result["complete"] and result["totalValue"] == 140100
+    assert result["unrealizedProfit"] == 20000
+    assert result["dayChange"] == 10000
+    assert not Korean().portfolio_snapshot(request.model_copy(update={"baseCurrency": "USD"}))["complete"]
+
+
+@pytest.mark.parametrize("ticker", ["005930", "00593.KS", "005930.L", "1234567.KQ"])
+def test_ambiguous_korean_tickers_are_rejected(ticker):
+    with pytest.raises(ValueError):
+        holdings(positions=[{"ticker": ticker, "quantity": 1, "averageCost": 1}])

@@ -1,6 +1,8 @@
 "use strict";
 
-const STORAGE_KEY = "portfolio-dashboard-v1";
+let STORAGE_KEY = null;
+let accountSub = null;
+let ownerAccount = false;
 const COLORS = ["#0b8f76", "#6487d5", "#a68bce", "#e5b364", "#6cabb5", "#bd8696", "#99a7b5"];
 const $ = selector => document.querySelector(selector);
 const emptyState = () => ({version: 1, portfolio: {positions: [], cashKRW: 0, cashUSD: 0, baseCurrency: "KRW"}, goal: null, portfolioSavedAt: null});
@@ -13,6 +15,11 @@ let marketSequence = 0;
 let portfolioBusy = false;
 let marketBusy = false;
 let projectionView = null;
+let cloudLoading = true;
+let cloudReady = false;
+let cloudRevision = null;
+let emailReady = false;
+let cloudSaving = false;
 
 function esc(value) {
   return String(value).replace(/[&<>"']/g, char => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[char]);
@@ -33,16 +40,22 @@ function validatePortfolio(value) {
       !finiteRange(value.cashKRW, 0, 1e15) || !finiteRange(value.cashUSD, 0, 1e12)) throw new Error("보유 자산의 형식 또는 금액을 확인해주세요.");
   const symbols = new Set();
   for (const item of value.positions) {
-    if (!item || typeof item.ticker !== "string" || !/^[A-Z][A-Z0-9.\-]{0,9}$/.test(item.ticker) ||
+    if (!item || typeof item.ticker !== "string" || !/^(?:[A-Z][A-Z0-9.\-]{0,9}|[0-9]{6}\.K[SQ])$/.test(item.ticker) ||
         !finiteRange(item.quantity, Number.MIN_VALUE, 1e9) || !finiteRange(item.averageCost, 0, 1e9) || symbols.has(item.ticker)) throw new Error("종목 코드·수량·평균 매입가를 확인해주세요. 같은 종목은 한 행에 합쳐 입력합니다.");
     symbols.add(item.ticker);
+    if (item.targetWeight != null && !finiteRange(item.targetWeight, 0, 100)) throw new Error("목표 비중은 0~100%로 입력해주세요.");
   }
+  if (value.rebalanceTolerancePct !== undefined && !finiteRange(value.rebalanceTolerancePct, .01, 50)) throw new Error("허용폭은 0.01~50%p로 입력해주세요.");
+  if (value.emailAlerts !== undefined && typeof value.emailAlerts !== "boolean") throw new Error("알림 설정을 확인해주세요.");
+  if (value.positions.reduce((sum, item) => sum + (item.targetWeight ?? 0), 0) > 100 + 1e-6) throw new Error("목표 비중 합계는 100% 이하여야 합니다. 남은 비중은 현금입니다.");
+  if (value.emailAlerts && (!value.positions.length || value.positions.some(item => item.targetWeight == null))) throw new Error("이메일 알림에는 모든 종목의 목표 비중이 필요합니다.");
 }
 function validateGoal(value) {
   if (!value || !["KRW", "USD"].includes(value.currency) || !finiteRange(value.targetAmount, .01, 1e15) ||
       !finiteRange(value.monthlyContribution, 0, 1e12) || !finiteRange(value.annualReturnPct, -50, 50)) throw new Error("목표 금액·월 투자금·가정 수익률을 확인해주세요.");
 }
 function saveState(next) {
+  if (!STORAGE_KEY) throw new Error("로그인 상태를 먼저 확인해주세요.");
   if (invalidStoredValue !== null) localStorage.setItem(STORAGE_KEY + "-recovery", invalidStoredValue);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   invalidStoredValue = null;
@@ -65,12 +78,83 @@ function restoreState() {
   }
 }
 async function api(path, body) {
-  const response = await fetch(path, body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const headers = accountSub ? {"X-Portfolio-Account": accountSub} : {};
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const response = await fetch(path, body === undefined ? {headers} : {method: "POST", headers, body: JSON.stringify(body)});
   const result = await response.json();
   if (response.status === 401) { location.assign("/login"); throw new Error("다시 로그인해주세요."); }
   if (!response.ok) throw new Error(typeof result.detail === "string" ? result.detail : "입력값을 확인하거나 잠시 후 다시 시도해주세요.");
   return result;
 }
+function renderEmailStatus(status = null) {
+  $("#test-email-btn").hidden = !ownerAccount;
+  if (!ownerAccount) {
+    $("#email-status").textContent = "리밸런싱은 화면에서 점검할 수 있습니다. 이메일 알림은 현재 운영자 전용입니다.";
+    return;
+  }
+  $("#test-email-btn").disabled = !cloudReady || !emailReady;
+  $("#email-status").textContent = !emailReady ? "이메일 발송 설정 대기 · 지금은 화면에서 리밸런싱을 점검할 수 있습니다." : `${state.portfolio.emailAlerts ? "이메일 알림 켜짐" : "이메일 알림 꺼짐"}${status ? ` · 최근 점검 ${new Date(status.checkedAt).toLocaleString("ko-KR")} · ${status.message}` : " · 아직 예약 점검 기록이 없습니다."}`;
+}
+async function persistState(next) {
+  if (cloudLoading || cloudSaving) throw new Error("저장 정보를 처리하고 있습니다. 잠시 후 다시 시도해주세요.");
+  if (!accountSub) {
+    state = next;
+    renderEmailStatus();
+    return;
+  }
+  cloudSaving = true;
+  try {
+    if (cloudReady) {
+      const result = await api("/api/dashboard/state", {state: next, revision: cloudRevision});
+      cloudRevision = result.revision;
+      $("#cloud-status").textContent = "자산·목표를 계정에 저장했습니다. 다른 기기에서도 불러올 수 있습니다.";
+    }
+    try { saveState(next); }
+    catch (error) {
+      if (!cloudReady) throw error;
+      state = next;
+      $("#cloud-status").textContent = "계정 저장은 완료됐지만 브라우저 백업을 저장하지 못했습니다.";
+    }
+    $("#sync-local-btn").hidden = true;
+    renderEmailStatus();
+  } finally { cloudSaving = false; }
+}
+async function loadCloudState() {
+  try {
+    const result = await api("/api/dashboard/state");
+    cloudReady = result.configured;
+    emailReady = result.emailReady;
+    cloudRevision = result.revision;
+    if (result.state) {
+      validatePortfolio(result.state.portfolio);
+      if (result.state.goal !== null) validateGoal(result.state.goal);
+      try {
+        const previous = localStorage.getItem(STORAGE_KEY);
+        if (previous && previous !== JSON.stringify(result.state) && !localStorage.getItem(STORAGE_KEY + "-before-cloud")) localStorage.setItem(STORAGE_KEY + "-before-cloud", previous);
+        saveState(result.state);
+      } catch { state = result.state; }
+    } else if (cloudReady) {
+      $("#sync-local-btn").hidden = !state.portfolio.positions.length && !state.portfolio.cashKRW && !state.portfolio.cashUSD && !state.goal;
+    }
+    $("#cloud-status").textContent = cloudReady ? result.state ? "계정에 저장된 자산·목표를 불러왔습니다. 수정 시 다른 기기에도 반영됩니다." : "계정에 저장된 정보가 없습니다. 기존 브라우저 정보는 자동으로 업로드하지 않습니다." : "서버 저장 설정 전입니다. 현재 브라우저에만 저장하며 이메일 점검에는 반영되지 않습니다.";
+    renderEmailStatus(result.notificationStatus);
+  } catch (error) {
+    cloudReady = false;
+    $("#cloud-status").textContent = `계정 정보를 불러오지 못했습니다. 기존 브라우저 정보는 보존했습니다. ${error.message}`;
+  } finally { cloudLoading = false; }
+}
+$("#sync-local-btn").addEventListener("click", async () => {
+  $("#sync-local-btn").disabled = true;
+  try { await persistState(state); $("#cloud-status").textContent = "이 브라우저의 자산·목표를 계정에 저장했습니다."; }
+  catch (error) { message(error.message); }
+  finally { $("#sync-local-btn").disabled = false; }
+});
+$("#test-email-btn").addEventListener("click", async () => {
+  $("#test-email-btn").disabled = true;
+  try { renderEmailStatus(await api("/api/dashboard/notifications/test", {})); }
+  catch (error) { $("#email-status").textContent = error.message; }
+  finally { $("#test-email-btn").disabled = !cloudReady || !emailReady; }
+});
 function updateRefreshButton() { $("#refresh-btn").disabled = portfolioBusy || marketBusy; }
 
 function renderMarket(data) {
@@ -128,22 +212,27 @@ function renderPortfolio(data) {
   $("#cash-value").textContent = registered ? money(data.cashValue) : "—";
   $("#cash-caption").textContent = `₩${number(state.portfolio.cashKRW, 0)} + $${number(state.portfolio.cashUSD)}`;
   $("#holding-count").textContent = `${data.holdings.length}개 종목`;
-  $("#holdings-description").textContent = state.portfolioSavedAt ? `직접 입력 · 수정 ${new Date(state.portfolioSavedAt).toLocaleDateString("ko-KR")} · 가격·매입가 USD` : "미국 주식 · ETF / 직접 입력 / 가격·매입가 USD";
+  $("#holdings-description").textContent = state.portfolioSavedAt ? `직접 입력 · 수정 ${new Date(state.portfolioSavedAt).toLocaleDateString("ko-KR")} · 가격·매입가 현지 통화` : "한국·미국 주식 · ETF / 직접 입력 / 가격·매입가 현지 통화";
   if (data.holdings.length) {
-    $("#holdings-body").innerHTML = data.holdings.map(item => `<tr><td><strong>${esc(item.ticker)}</strong><small>${item.available ? esc(item.asOf) : "시세 미확인"}</small></td><td class="number">${number(item.quantity, 6)}</td><td class="number">${item.available ? money(item.price, "USD") : "—"}<small>평균 ${money(item.averageCost, "USD")}</small></td><td class="number">${money(item.value)}</td><td class="number ${item.available ? tone(item.profitPct) : "muted"}">${item.available ? pct(item.profitPct) : "조회 불가"}</td><td class="number">${item.weightPct === null ? "—" : `${number(item.weightPct)}%`}</td></tr>`).join("");
+    $("#holdings-body").innerHTML = data.holdings.map(item => `<tr><td><strong>${esc(item.ticker)}</strong><small>${item.available ? esc(item.asOf) : "시세 미확인"}</small></td><td class="number">${number(item.quantity, 6)}</td><td class="number">${item.available ? money(item.price, item.currency) : "—"}<small>평균 ${money(item.averageCost, item.currency)}</small></td><td class="number">${money(item.value)}</td><td class="number ${item.available ? tone(item.profitPct) : "muted"}">${item.available ? pct(item.profitPct) : "조회 불가"}</td><td class="number">${item.weightPct === null ? "—" : `${number(item.weightPct)}%`}</td></tr>`).join("");
   } else {
     $("#holdings-body").innerHTML = `<tr><td colspan="6" class="empty-table"><strong>${registered ? "등록한 주식이 없습니다." : "아직 등록한 자산이 없습니다."}</strong><p>종목·보유 수량·평균 매입가를 입력하면 실제 보유 현황이 표시됩니다.</p><button class="button primary" data-edit-portfolio type="button">보유 자산 등록</button></td></tr>`;
   }
   const fxNote = data.fx ? `환율 ${number(data.fx.value)}원/USD (${data.fx.asOf})` : "환율 조회 불가";
-  $("#valuation-note").textContent = `Yahoo 최근 일봉 · ${fxNote}. USD 평가손익을 현재 환율로 환산하며 취득 환율에 따른 환차손익·실현손익·배당 누계는 제외합니다.`;
+  $("#valuation-note").textContent = `Yahoo 최근 일봉 · ${fxNote}. 종목별 평가손익을 표시 통화로 환산하며 취득 환율에 따른 환차손익·실현손익·배당 누계는 제외합니다.`;
   $("#updated-at").textContent = `조회 ${new Date(data.fetchedAt).toLocaleTimeString("ko-KR", {hour: "2-digit", minute: "2-digit"})}`;
   renderAllocation(data);
+  const check = data.rebalance;
+  $("#rebalance-status").textContent = check ? `${check.message}${check.asOf ? ` 시세 기준 ${check.asOf} · 허용폭 ±${number(check.thresholdPct)}%p` : ""}` : "목표 비중을 입력해주세요.";
+  $("#rebalance-body").innerHTML = (check?.items ?? []).map(item => `<tr><td>${esc(item.ticker)}${item.needsRebalance ? " · 점검 필요" : ""}</td><td class="number">${number(item.weightPct)}%</td><td class="number">${number(item.targetWeightPct)}%</td><td class="number">${pct(item.driftPct).replace("%", "%p")}</td><td class="number">${money(item.adjustmentValue)}</td></tr>`).join("");
 }
 async function loadPortfolio() {
   const sequence = ++portfolioSequence;
   ++goalSequence;
   portfolioBusy = true;
   snapshot = null;
+  $("#rebalance-status").textContent = "최신 시세로 점검하고 있습니다.";
+  $("#rebalance-body").textContent = "";
   $("#asset-summary").setAttribute("aria-busy", "true");
   $("#updated-at").textContent = "보유 자산 평가 중";
   showGoalPending("보유 자산을 평가한 뒤 목표 경로를 계산합니다.");
@@ -160,6 +249,7 @@ async function loadPortfolio() {
       $("#total-caption").textContent = "시세 조회 실패 · 새로고침해주세요";
       message(error.message || "자산 평가에 실패했습니다.");
       showGoalPending("자산 평가를 완료한 뒤 계산할 수 있습니다.");
+      $("#rebalance-status").textContent = "자산 평가에 실패해 리밸런싱 점검을 보류했습니다.";
     }
   } finally {
     if (sequence === portfolioSequence) {
@@ -231,23 +321,83 @@ async function loadGoal() {
   }
 }
 
+let symbolSearchSequence = 0;
+function clearSymbolSearch() {
+  symbolSearchSequence++;
+  $("#symbol-results").replaceChildren();
+  $("#symbol-search-status").textContent = "";
+}
+async function searchSymbols() {
+  clearSymbolSearch();
+  const query = $("#symbol-query").value.trim();
+  if (!query) return;
+  const sequence = symbolSearchSequence;
+  $("#symbol-search-status").textContent = "검색 중…";
+  try {
+    const data = await api(`/api/dashboard/symbols?q=${encodeURIComponent(query)}`);
+    if (sequence !== symbolSearchSequence) return;
+    $("#symbol-search-status").textContent = data.items.length ? "종목을 선택한 뒤 수량과 평균 매입가를 입력하세요." : "검색 결과가 없습니다. 다른 이름이나 코드로 검색해주세요.";
+    for (const item of data.items) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "button quiet";
+      button.textContent = `${item.name} · ${item.ticker} · ${item.market} · ${item.currency}`;
+      button.addEventListener("click", () => {
+        const rows = [...$("#owned-positions").children];
+        const existing = rows.find(row => row.querySelector('[name=ticker]').value.trim().toUpperCase() === item.ticker);
+        const empty = rows.find(row => [...row.querySelectorAll("input")].every(input => !input.value.trim()));
+        if (existing) {
+          existing.querySelector('[name=quantity]').focus();
+          $("#symbol-search-status").textContent = "이미 입력한 종목입니다. 기존 행에서 수량을 수정해주세요.";
+          return;
+        }
+        if (!empty && rows.length >= 30) {
+          $("#symbol-search-status").textContent = "종목은 최대 30개까지 입력할 수 있습니다.";
+          return;
+        }
+        const row = empty || addOwnedRow({ticker: item.ticker});
+        row.querySelector('[name=ticker]').value = item.ticker;
+        row.querySelector('[name=quantity]').focus();
+        clearSymbolSearch();
+        $("#symbol-search-status").textContent = `${item.name} 선택됨 · 평균 매입가는 ${item.currency === "KRW" ? "원화" : "달러"}로 입력하세요.`;
+      });
+      $("#symbol-results").appendChild(button);
+    }
+  } catch (error) {
+    if (sequence === symbolSearchSequence) $("#symbol-search-status").textContent = error.message;
+  }
+}
+$("#search-symbols").addEventListener("click", searchSymbols);
+$("#symbol-query").addEventListener("input", clearSymbolSearch);
+$("#symbol-query").addEventListener("keydown", event => {
+  if (event.key === "Enter" && !event.isComposing) { event.preventDefault(); searchSymbols(); }
+});
+
 function addOwnedRow(position = {}) {
   if ($("#owned-positions").children.length >= 30) return;
   const fragment = $("#owned-position-template").content.cloneNode(true);
   const row = fragment.querySelector(".owned-row");
-  for (const name of ["ticker", "quantity", "averageCost"]) row.querySelector(`[name=${name}]`).value = position[name] ?? "";
+  for (const name of ["ticker", "quantity", "averageCost", "targetWeight"]) row.querySelector(`[name=${name}]`).value = position[name] ?? "";
   row.querySelector(".remove-owned").addEventListener("click", () => { row.remove(); $("#add-owned-position").disabled = false; });
   $("#owned-positions").appendChild(fragment);
   $("#add-owned-position").disabled = $("#owned-positions").children.length >= 30;
+  return row;
 }
 function openPortfolio() {
+  if (cloudLoading) { message("계정 정보를 확인하고 있습니다. 잠시 후 다시 시도해주세요."); return; }
+  clearSymbolSearch();
+  $("#symbol-query").value = "";
   $("#owned-positions").textContent = "";
   if (state.portfolio.positions.length) state.portfolio.positions.forEach(addOwnedRow); else addOwnedRow();
   for (const name of ["cashKRW", "cashUSD", "baseCurrency"]) $("#portfolio-form").elements[name].value = state.portfolio[name];
+  $("#portfolio-form").elements.rebalanceTolerancePct.value = state.portfolio.rebalanceTolerancePct ?? 5;
+  $("#portfolio-form").elements.emailAlerts.checked = state.portfolio.emailAlerts ?? false;
+  $("#portfolio-form").elements.emailAlerts.disabled = !cloudReady || !emailReady;
   $("#portfolio-form-status").textContent = "";
   $("#portfolio-dialog").showModal();
 }
 function openGoal() {
+  if (cloudLoading) { message("계정 정보를 확인하고 있습니다. 잠시 후 다시 시도해주세요."); return; }
   const form = $("#goal-form");
   form.reset();
   form.elements.currency.value = state.goal?.currency ?? state.portfolio.baseCurrency;
@@ -262,58 +412,81 @@ document.addEventListener("click", event => {
 $("#add-owned-position").addEventListener("click", () => addOwnedRow());
 $("#edit-goal-btn").addEventListener("click", openGoal);
 $("#refresh-btn").addEventListener("click", () => { loadPortfolio(); loadMarkets(); });
-$("#portfolio-form").addEventListener("submit", event => {
+$("#portfolio-form").addEventListener("submit", async event => {
   event.preventDefault();
   try {
     const positions = [...$("#owned-positions").children].flatMap(row => {
       const inputs = ["ticker", "quantity", "averageCost"].map(name => row.querySelector(`[name=${name}]`).value.trim());
       if (inputs.every(value => value === "")) return [];
       if (inputs.some(value => value === "")) throw new Error("종목의 수량과 평균 매입가를 모두 입력해주세요.");
-      return [{ticker: inputs[0].toUpperCase(), quantity: Number(inputs[1]), averageCost: Number(inputs[2])}];
+      const target = row.querySelector('[name=targetWeight]').value.trim();
+      return [{ticker: inputs[0].toUpperCase(), quantity: Number(inputs[1]), averageCost: Number(inputs[2]), targetWeight: target === "" ? null : Number(target)}];
     });
     const data = new FormData(event.target);
-    const portfolio = {positions, cashKRW: Number(data.get("cashKRW")), cashUSD: Number(data.get("cashUSD")), baseCurrency: data.get("baseCurrency")};
+    const portfolio = {positions, cashKRW: Number(data.get("cashKRW")), cashUSD: Number(data.get("cashUSD")), baseCurrency: data.get("baseCurrency"), rebalanceTolerancePct: Number(data.get("rebalanceTolerancePct")), emailAlerts: data.has("emailAlerts")};
     validatePortfolio(portfolio);
-    saveState({...state, portfolio, portfolioSavedAt: new Date().toISOString()});
+    await persistState({...state, portfolio, portfolioSavedAt: new Date().toISOString()});
     $("#portfolio-dialog").close();
-    message("보유 자산을 이 브라우저에 저장했습니다. 최신 시세로 평가하고 있습니다.");
+    message(!accountSub ? "입력을 적용했습니다. 비로그인 입력은 저장되지 않으며 새로고침·로그인 시 초기화됩니다." : cloudReady ? "보유 자산과 목표 비중을 계정에 저장했습니다. 최신 시세로 점검합니다." : "현재 브라우저에만 저장했습니다. 이메일 점검에는 반영되지 않습니다.");
     loadPortfolio();
   } catch (error) { $("#portfolio-form-status").textContent = error.name === "QuotaExceededError" || error.name === "SecurityError" ? "브라우저 저장에 실패했습니다. 입력은 유지됩니다. 저장 공간과 권한을 확인해주세요." : error.message; }
 });
-$("#goal-form").addEventListener("submit", event => {
+$("#goal-form").addEventListener("submit", async event => {
   event.preventDefault();
   try {
     const data = new FormData(event.target);
     const goal = {currency: data.get("currency"), targetAmount: Number(data.get("targetAmount")), monthlyContribution: Number(data.get("monthlyContribution")), annualReturnPct: Number(data.get("annualReturnPct"))};
     validateGoal(goal);
-    saveState({...state, goal});
+    await persistState({...state, goal});
     $("#goal-dialog").close();
-    message("목표 가정을 이 브라우저에 저장했습니다. 달성 시점은 가정이 바뀌면 달라집니다.");
+    message(!accountSub ? "목표를 적용했습니다. 비로그인 입력은 저장되지 않으며 새로고침·로그인 시 초기화됩니다." : cloudReady ? "목표 가정을 계정에 저장했습니다." : "목표 가정을 현재 브라우저에만 저장했습니다.");
     loadGoal();
   } catch (error) { $("#goal-form-status").textContent = error.name === "QuotaExceededError" || error.name === "SecurityError" ? "목표 저장에 실패했습니다. 현재 입력은 유지됩니다." : error.message; }
 });
 
-$("#load-toss").addEventListener("click", async () => {
-  const button = $("#load-toss");
-  button.disabled = true;
-  $("#toss-status").textContent = "Toss 계좌를 조회하고 있습니다.";
+async function initializeAccount() {
   try {
-    const data = await api("/api/toss/holdings");
-    $("#toss-body").innerHTML = data.items.map(item => `<tr><td>${esc(item.account)} · ${esc(item.symbol)}<br><small>${esc(item.name)}</small></td><td class="number">${number(Number(item.quantity), 8)}</td><td class="number">${money(Number(item.averageCost), item.currency)}</td><td class="number">${money(Number(item.marketValue), item.currency)}</td><td class="number ${tone(Number(item.profitLoss))}">${money(Number(item.profitLoss), item.currency)}<br>${pct(Number(item.profitLossPct))}</td></tr>`).join("");
-    $("#toss-status").textContent = `${data.accountCount}개 계좌 · ${data.items.length}개 보유 종목 · 조회 ${new Date(data.fetchedAt).toLocaleString("ko-KR")}`;
-  } catch (error) {
-    $("#toss-body").textContent = "";
-    $("#toss-status").textContent = error.message;
-  } finally { button.disabled = false; }
+    const response = await fetch("/auth/session");
+    if (!response.ok) throw new Error("로그인 상태를 확인하지 못했습니다.");
+    const data = await response.json();
+    if (!data.user) {
+      cloudLoading = false;
+      $("#signed-in-user").textContent = "저장 없이 이용 중";
+      $("#cloud-status").textContent = "로그인 없이 이용할 수 있습니다. 입력은 저장되지 않으며 새로고침·로그인 시 초기화됩니다. 저장하려면 Google로 로그인해주세요.";
+      $("#portfolio-form button[type=submit]").textContent = "적용하고 현황 보기";
+      $("#goal-form button[type=submit]").textContent = "목표 적용·계산";
+      renderEmailStatus();
+      loadMarkets();
+      loadPortfolio();
+      return;
+    }
+    accountSub = data.user.sub;
+    ownerAccount = data.isOwner === true;
+    STORAGE_KEY = `portfolio-dashboard-v1:${encodeURIComponent(accountSub)}`;
+    $("#signed-in-user").textContent = data.user.email;
+    $("#login-link").hidden = true;
+    $("#logout-form").hidden = false;
+    if (ownerAccount) {
+      try {
+        const legacy = localStorage.getItem("portfolio-dashboard-v1");
+        if (legacy && localStorage.getItem(STORAGE_KEY) === null) localStorage.setItem(STORAGE_KEY, legacy);
+      } catch { /* Browser storage may be disabled; server storage still works. */ }
+    }
+    restoreState();
+    loadMarkets();
+    await loadCloudState();
+    loadPortfolio();
+  } catch { message("로그인 상태를 확인하지 못했습니다. 새로고침해주세요."); }
+}
+initializeAccount();
+document.addEventListener("visibilitychange", async () => {
+  if (document.hidden) return;
+  try {
+    const response = await fetch("/auth/session");
+    const data = await response.json();
+    if ((data.user?.sub ?? null) !== accountSub) location.reload();
+  } catch { /* API authorization still protects account data. */ }
 });
-fetch("/auth/session").then(response => response.json()).then(data => {
-  if (!data.user) { location.replace("/login"); return; }
-  $("#signed-in-user").textContent = data.user.email;
-}).catch(() => message("로그인 상태를 확인하지 못했습니다. 새로고침해주세요."));
-
-restoreState();
-loadMarkets();
-loadPortfolio();
 let observedProjectionWidth = 0;
 new ResizeObserver(([entry]) => {
   const width = Math.round(entry.contentRect.width);

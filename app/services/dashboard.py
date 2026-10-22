@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 import yfinance as yf
 
 from app.dashboard_schemas import PortfolioSnapshotRequest
+from app.services.rebalance_alerts import evaluate_rebalance
 
 
 MARKETS = [("^GSPC", "S&P 500", "pt"), ("^IXIC", "나스닥", "pt"), ("^VIX", "변동성 · VIX", "pt"), ("KRW=X", "달러 / 원", "KRW")]
@@ -120,24 +121,36 @@ class DashboardService:
             fx = self.get_quote("KRW=X")
         except Exception:
             pass
-        multiplier = 1 if request.baseCurrency == "USD" else fx["value"] if fx else None
-        prev_multiplier = 1 if request.baseCurrency == "USD" else fx["previous"] if fx else None
+        def convert(value, currency, *, previous=False):
+            if currency == request.baseCurrency:
+                return value
+            if fx is None:
+                return None
+            rate = fx["previous" if previous else "value"]
+            return value * rate if currency == "USD" else value / rate
 
         def holding(position):
             item = position.model_dump()
             try:
                 price = self.get_quote(position.ticker)
-                if price.get("currency") != "USD":
-                    raise ValueError("미국 달러로 거래되는 종목만 지원합니다.")
+                currency = "KRW" if position.ticker.endswith((".KS", ".KQ")) else "USD"
+                if price.get("currency") != currency:
+                    raise ValueError("종목의 거래 통화를 확인할 수 없습니다.")
                 value = position.quantity * price["value"]
                 cost = position.quantity * position.averageCost
-                return {**item, "available": True, "price": price["value"],
+                return {**item, "currency": currency, "available": True, "price": price["value"],
                         "previousPrice": price["previous"], "asOf": price["asOf"],
-                        "previousAsOf": price["previousAsOf"], "valueUSD": value,
-                        "costUSD": cost, "profitUSD": value - cost,
+                        "previousAsOf": price["previousAsOf"],
+                        "valueUSD": value if currency == "USD" else value / fx["value"] if fx else None,
+                        "costUSD": cost if currency == "USD" else cost / fx["value"] if fx else None,
+                        "profitUSD": (value - cost) if currency == "USD" else (value - cost) / fx["value"] if fx else None,
+                        "value": convert(value, currency), "cost": convert(cost, currency),
+                        "previousValue": convert(position.quantity * price["previous"], currency, previous=True),
                         "profitPct": (value / cost - 1) * 100 if cost else None}
             except Exception:
-                return {**item, "available": False, "error": "USD 시세를 확인할 수 없습니다. 미국 상장 종목 코드를 확인해주세요."}
+                return {**item, "currency": "KRW" if position.ticker.endswith((".KS", ".KQ")) else "USD",
+                        "available": False, "value": None,
+                        "error": "시세를 확인할 수 없습니다. 종목 코드(.KS/.KQ)를 확인해주세요."}
 
         with ThreadPoolExecutor(max_workers=6) as pool:
             holdings = list(pool.map(holding, request.positions))
@@ -147,27 +160,28 @@ class DashboardService:
         else:
             cash = request.cashUSD + request.cashKRW / fx["value"] if fx else request.cashUSD if request.cashKRW == 0 else None
             previous_cash = request.cashUSD + request.cashKRW / fx["previous"] if fx else cash
-        complete = all(h["available"] for h in holdings) and cash is not None and (not holdings or multiplier is not None)
+        complete = all(h["available"] for h in holdings) and cash is not None and all(h["value"] is not None for h in holdings)
         total = profit = profit_pct = day_change = day_change_pct = None
         if complete:
-            equity = sum(h["valueUSD"] for h in holdings) * (multiplier or 1)
-            cost = sum(h["costUSD"] for h in holdings) * (multiplier or 1)
+            equity = sum(h["value"] for h in holdings)
+            cost = sum(h["cost"] for h in holdings)
             total = equity + cash
             profit = equity - cost
             profit_pct = profit / cost * 100 if cost else None
             # Current quantities are held fixed; this is not a transaction-based daily return.
             same_previous_date = len({(h["asOf"], h["previousAsOf"]) for h in holdings}) <= 1
             if same_previous_date:
-                previous_value = sum(h["quantity"] * h["previousPrice"] for h in holdings) * (prev_multiplier or 1) + previous_cash
+                previous_value = sum(h["previousValue"] for h in holdings) + previous_cash
                 day_change = total - previous_value
                 day_change_pct = day_change / previous_value * 100 if previous_value > 0 else None
         for item in holdings:
-            item["value"] = item["valueUSD"] * multiplier if item["available"] and multiplier is not None else None
             item["weightPct"] = item["value"] / total * 100 if item["value"] is not None and total else None
-        return {
+        snapshot = {
             "baseCurrency": request.baseCurrency, "complete": complete, "holdings": holdings,
             "totalValue": total, "cashValue": cash, "unrealizedProfit": profit,
             "unrealizedProfitPct": profit_pct, "dayChange": day_change, "dayChangePct": day_change_pct,
             "fx": fx, "fetchedAt": datetime.now(timezone.utc).isoformat(),
             "hasAssets": bool(holdings) or request.cashKRW > 0 or request.cashUSD > 0,
         }
+        snapshot["rebalance"] = evaluate_rebalance(request, snapshot)
+        return snapshot

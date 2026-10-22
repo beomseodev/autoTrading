@@ -12,6 +12,10 @@ os.environ["GOOGLE_CLIENT_ID"] = "test-client"
 os.environ["GOOGLE_CLIENT_SECRET"] = "test-secret"
 os.environ["GOOGLE_OWNER_EMAIL"] = "owner@gmail.com"
 os.environ["APP_BASE_URL"] = "http://localhost:8000"
+os.environ["BLOB_READ_WRITE_TOKEN"] = ""
+os.environ["GMAIL_APP_PASSWORD"] = ""
+os.environ["CRON_SECRET"] = ""
+os.environ["GOOGLE_OWNER_SUB"] = ""
 
 
 def session_cookie(user=None):

@@ -1,7 +1,7 @@
 "use strict";
 fetch("/auth/session").then(response => response.json()).then(data => {
   if (data.user) { location.replace("/"); return; }
-  document.querySelector("#login-status").textContent = data.configured ? "본인 전용 서비스입니다. 다른 계정은 접근할 수 없습니다." : "Google 로그인 설정이 필요합니다. 서버의 .env 설정과 README를 확인해주세요.";
+  document.querySelector("#login-status").textContent = data.configured ? "저장하려면 Google 계정으로 로그인해주세요. 로그인 없이도 저장을 제외한 기능을 이용할 수 있습니다." : "Google 로그인 설정이 필요합니다. 서버의 .env 설정과 README를 확인해주세요.";
   if (!data.configured) {
     document.querySelector("#google-login").removeAttribute("href");
     document.querySelector("#google-login").setAttribute("aria-disabled", "true");

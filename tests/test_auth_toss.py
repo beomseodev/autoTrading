@@ -17,17 +17,42 @@ def owner_client():
     return client
 
 
-def test_private_routes_require_owner():
+def test_saved_data_routes_require_login_but_pages_are_public():
     client = TestClient(app)
-    assert client.get("/", follow_redirects=False).headers["location"] == "/login"
-    for path in ("/api/toss/holdings", "/api/dashboard/markets"):
+    assert client.get("/").status_code == 200
+    assert client.get("/lab").status_code == 200
+    for path in ("/api/toss/holdings", "/api/dashboard/state", "/api/dashboard/notifications/test"):
         response = client.get(path)
         assert response.status_code == 401
         assert response.headers["cache-control"] == "no-store"
     client.cookies.set("portfolio_session", session_cookie({"sub": "other", "email": "other@gmail.com"}))
-    assert client.get("/api/toss/holdings").status_code == 401
+    assert client.get("/lab").status_code == 200
+    assert client.get("/api/toss/holdings").status_code == 404
     client.cookies.set("portfolio_session", "tampered")
     assert client.get("/api/toss/holdings").status_code == 401
+
+
+def test_guest_cannot_persist_or_send_email(monkeypatch):
+    def private_access(*args, **kwargs):
+        pytest.fail('Guest reached private storage or mail')
+    monkeypatch.setattr('app.dashboard_state.PortfolioStore', private_access)
+    monkeypatch.setattr('app.dashboard_state.run_notification', private_access)
+    client = TestClient(app, headers={'Origin': 'http://localhost:8000'})
+    for path in ('/api/dashboard/state', '/api/dashboard/notifications/test'):
+        assert client.post(path, json={}).status_code == 401
+    assert client.get('/api/dashboard/state').status_code == 401
+    assert client.get('/api/cron/rebalance').status_code == 401
+    assert client.get('/api/dashboard/state/', follow_redirects=False).status_code == 401
+    assert client.get('/api/unknown-future-endpoint').status_code == 401
+    assert client.get('/auth/session').json()['user'] is None
+
+
+def test_guest_computation_retains_origin_and_stale_account_checks():
+    client = TestClient(app)
+    assert client.post('/api/dashboard/goal', json={}, headers={'Origin': 'https://evil.example'}).status_code == 403
+    response = client.post('/api/dashboard/goal', json={}, headers={
+        'Origin': 'http://localhost:8000', 'X-Portfolio-Account': 'previous-user'})
+    assert response.status_code == 409
 
 
 def test_owner_session_logout_and_csrf():
@@ -39,18 +64,18 @@ def test_owner_session_logout_and_csrf():
 
 
 def test_configuration_fails_closed(monkeypatch):
-    monkeypatch.delenv("GOOGLE_OWNER_EMAIL")
     client = owner_client()
+    monkeypatch.delenv("SESSION_SECRET")
     assert client.get("/auth/login").status_code == 503
     assert client.get("/api/toss/holdings").status_code == 401
 
 
 @pytest.mark.parametrize("claims,expected", [
     ({"sub": "google-owner", "email": "owner@gmail.com", "email_verified": True}, 303),
-    ({"sub": "other", "email": "other@gmail.com", "email_verified": True}, 403),
+    ({"sub": "other", "email": "other@gmail.com", "email_verified": True}, 303),
     ({"sub": "google-owner", "email": "owner@gmail.com", "email_verified": False}, 403),
 ])
-def test_callback_owner_validation(monkeypatch, claims, expected):
+def test_callback_verified_account_validation(monkeypatch, claims, expected):
     async def exchange(request):
         return {"userinfo": claims, "access_token": "must-not-be-in-cookie"}
     monkeypatch.setattr(auth.oauth.google, "authorize_access_token", exchange)
@@ -86,6 +111,36 @@ def test_login_redirect_has_state_and_nonce(monkeypatch):
     assert "httponly" in response.headers["set-cookie"].lower()
 
 
+def test_public_login_does_not_require_operator_configuration(monkeypatch):
+    monkeypatch.delenv('GOOGLE_OWNER_EMAIL')
+    client = owner_client()
+    assert client.get('/lab').status_code == 200
+    session = client.get('/auth/session').json()
+    assert session['configured'] and session['user'] and not session['isOwner']
+
+
+def test_stale_tab_account_header_prevents_cross_account_save():
+    client = owner_client()
+    client.cookies.set('portfolio_session', session_cookie({'sub': 'second-user', 'email': 'second@gmail.com'}), domain='testserver.local', path='/')
+    response = client.post('/api/dashboard/state', json={}, headers={'X-Portfolio-Account': 'google-owner'})
+    assert response.status_code == 409
+
+
+@pytest.mark.parametrize('claims', [
+    {'email': 'user@gmail.com', 'email_verified': True},
+    {'sub': '', 'email': 'user@gmail.com', 'email_verified': True},
+    {'sub': 'user', 'email': '', 'email_verified': True},
+    {'sub': ['bad'], 'email': 'user@gmail.com', 'email_verified': True},
+])
+def test_callback_requires_valid_identity(monkeypatch, claims):
+    async def exchange(request):
+        return {'userinfo': claims}
+    monkeypatch.setattr(auth.oauth.google, 'authorize_access_token', exchange)
+    client = TestClient(app)
+    assert client.get('/auth/callback', follow_redirects=False).status_code == 403
+    assert client.get('/auth/session').json()['user'] is None
+
+
 def test_toss_normalization_and_masking(monkeypatch):
     monkeypatch.setenv("TOSS_CLIENT_ID", "test-id")
     monkeypatch.setenv("TOSS_CLIENT_SECRET", "test-secret")
@@ -108,7 +163,7 @@ def test_toss_normalization_and_masking(monkeypatch):
 def test_toss_missing_credentials(monkeypatch):
     monkeypatch.delenv("TOSS_CLIENT_ID", raising=False)
     response = owner_client().get("/api/toss/holdings")
-    assert response.status_code == 503
+    assert response.status_code == 404
 
 
 @pytest.mark.parametrize("mode", ["timeout", "429", "malformed", "partial"])
