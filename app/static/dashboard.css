@@ -261,5 +261,11 @@ input,select { width:100%; min-width:0; padding:9px 10px; border:1px solid #dfe6
   .asset-summary .summary-card:nth-child(n+3) { display:none; }
 }
 .panel-resize { position:absolute; bottom:3px; right:3px; width:28px; height:28px; border:1px solid var(--line); border-radius:6px; background:white; color:var(--accent); cursor:nwse-resize; touch-action:none; z-index:1; }
+.recovery-panel { padding:20px; margin:16px 0; border:1px solid var(--line); border-radius:12px; background:white; }
+#other-drafts:not([hidden]) { display:block; margin:12px 0; }
+#draft-list { display:block; max-width:100%; margin-top:6px; }
+.recovery-comparison { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; }
+.recovery-comparison pre { white-space:pre-wrap; overflow-wrap:anywhere; font:inherit; font-size:13px; line-height:1.6; }
+@media(max-width:680px) { .recovery-comparison { grid-template-columns:1fr; } }
 @media(max-width:900px) { .overview-grid { grid-template-columns:minmax(0,1fr); } .dashboard-panel { grid-column:1/-1; } .panel-resize { cursor:ns-resize; } }
 @media(max-width:680px) { .editor-labels { display:none; } .owned-row { grid-template-columns:1fr 1fr; padding-bottom:12px; border-bottom:1px solid var(--line); } .owned-row .remove-owned { grid-column:2; justify-self:end; width:32px; } }

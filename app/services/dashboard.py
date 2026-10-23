@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
 import math
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from time import time
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
+from curl_cffi import requests
 import yfinance as yf
 
 from app.dashboard_schemas import PortfolioSnapshotRequest
@@ -69,10 +70,11 @@ def parse_fred_csv(text: str, series: str) -> list[tuple[date, float]]:
 @lru_cache(maxsize=32)
 def macro_observation(series: str, bucket: int) -> dict:
     params = urlencode({"id": series, "cosd": (date.today() - timedelta(days=800)).isoformat()})
-    request = Request("https://fred.stlouisfed.org/graph/fredgraph.csv?" + params,
-                      headers={"User-Agent": "PortfolioDashboard/1.0"})
-    with urlopen(request, timeout=12) as response:
-        observations = parse_fred_csv(response.read(2_000_000).decode("utf-8-sig"), series)
+    # Browser-compatible TLS avoids FRED read timeouts in the serverless runtime.
+    response = requests.get("https://fred.stlouisfed.org/graph/fredgraph.csv?" + params,
+                            impersonate="chrome", timeout=12)
+    response.raise_for_status()
+    observations = parse_fred_csv(response.content.decode("utf-8-sig"), series)
     if series == "CPIAUCSL":
         by_month = {(d.year, d.month): value for d, value in observations}
         observations = [(d, (value / by_month[(d.year - 1, d.month)] - 1) * 100)
@@ -110,6 +112,7 @@ class DashboardService:
             try:
                 return {**item, **self.get_macro(series), "available": True}
             except Exception:
+                logging.getLogger(__name__).exception("FRED observation failed: %s", series)
                 return {**item, "available": False, "error": "공표 데이터를 불러오지 못했습니다."}
 
         with ThreadPoolExecutor(max_workers=8) as pool:
@@ -171,8 +174,11 @@ class DashboardService:
             profit = equity - cost
             profit_pct = profit / cost * 100 if cost else None
             # Current quantities are held fixed; this is not a transaction-based daily return.
-            same_previous_date = len({(h["asOf"], h["previousAsOf"]) for h in holdings}) <= 1
-            if same_previous_date:
+            periods = {(h["asOf"], h["previousAsOf"]) for h in holdings}
+            foreign_cash = request.cashUSD if request.baseCurrency == "KRW" else request.cashKRW
+            if foreign_cash or any(h["currency"] != request.baseCurrency for h in holdings):
+                periods.add((fx["asOf"], fx["previousAsOf"]))
+            if len(periods) <= 1:
                 previous_value = sum(h["previousValue"] for h in holdings) + previous_cash
                 day_change = total - previous_value
                 day_change_pct = day_change / previous_value * 100 if previous_value > 0 else None

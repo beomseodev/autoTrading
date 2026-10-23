@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const vm = require('node:vm');
 
-function browser(user, stored = new Map(), isOwner = false) {
+function browser(user, stored = new Map(), isOwner = false, cloud = false) {
   const nodes = new Map();
   const element = () => ({
     textContent: '', children: [], dataset: {}, attributes: {}, events: {}, clientWidth: 1000,
@@ -20,21 +20,22 @@ function browser(user, stored = new Map(), isOwner = false) {
   };
   const requests = [];
   const context = vm.createContext({
-    console, Intl, Date, Number, Map, Set, JSON, structuredClone,
+    console, Intl, Date, Number, Map, Set, JSON, structuredClone, crypto: require('node:crypto').webcrypto,
     setTimeout: () => 1, clearTimeout() {},
     document: {querySelector: node, createElement: element, addEventListener() {}},
     getComputedStyle: () => ({columnGap: '16px'}), matchMedia: () => ({matches: false}),
-    localStorage: {getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key)},
+    localStorage: {get length() { return stored.size; }, key: index => [...stored.keys()][index], getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key)},
     fetch: async (path, options) => {
       requests.push({path, options});
       return {ok: true, status: 200, json: async () => ({user, isOwner})};
     },
-    location: {replace() {}, reload() {}},
+    location: {assign() {}, replace() {}, reload() {}},
     ResizeObserver: class {observe() {}},
   });
   const script = fs.readFileSync('app/static/dashboard.js', 'utf8').replace('\ninitializeAccount();', '\n');
   vm.runInContext(script, context);
-  vm.runInContext('loadMarkets = () => {}; loadCloudState = async () => {}; loadPortfolio = () => {};', context);
+  vm.runInContext('loadMarkets = () => {}; loadPortfolio = () => {};', context);
+  if (!cloud) vm.runInContext('loadCloudState = async () => {};', context);
   return {context, stored, requests, run: code => vm.runInContext(code, context)};
 }
 

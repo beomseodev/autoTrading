@@ -1,6 +1,6 @@
 from datetime import date
-from io import BytesIO
 
+import httpx
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
@@ -97,6 +97,25 @@ def test_mismatched_dates_do_not_produce_daily_change():
     assert result['complete'] and result['dayChange'] is None
 
 
+@pytest.mark.parametrize('field', ['asOf', 'previousAsOf'])
+@pytest.mark.parametrize('base', ['KRW', 'USD'])
+def test_daily_change_requires_matching_fx_period_for_holdings_or_cash(field, base):
+    class StaleFX(FakeDashboard):
+        def get_quote(self, symbol):
+            item = super().get_quote(symbol)
+            if symbol == 'KRW=X':
+                item[field] = '2026-10-19'
+            return item
+    result = StaleFX().portfolio_snapshot(holdings(baseCurrency=base))
+    assert result['complete'] and result['totalValue'] > 0
+    assert result['dayChange'] is None and result['dayChangePct'] is None
+    # USD holdings and USD cash do not depend on FX.
+    native = StaleFX().portfolio_snapshot(holdings(baseCurrency='USD', cashKRW=0))
+    assert native['dayChange'] == 100
+    cash = StaleFX().portfolio_snapshot(holdings(positions=[]))
+    assert cash['dayChange'] == 10000
+
+
 @pytest.mark.parametrize('changes', [
     {'cashUSD': 'NaN'}, {'cashKRW': 'Infinity'},
     {'positions': [{'ticker': 'AAPL', 'quantity': -1, 'averageCost': 1}]},
@@ -146,7 +165,7 @@ def test_goal_monthly_compounding_matches_one_year_formula():
 def test_fred_parse_missing_values_and_yoy_uses_exact_calendar_month(monkeypatch):
     rows = 'observation_date,CPIAUCSL\n2024-01-01,100\n2024-02-01,200\n2025-01-01,110\n2025-02-01,220\n2025-03-01,.\n'
     assert len(parse_fred_csv(rows, 'CPIAUCSL')) == 4
-    monkeypatch.setattr('app.services.dashboard.urlopen', lambda *args, **kwargs: BytesIO(rows.encode()))
+    monkeypatch.setattr('app.services.dashboard.requests.get', lambda *args, **kwargs: httpx.Response(200, content=rows.encode(), request=httpx.Request('GET', 'https://fred.stlouisfed.org/graph/fredgraph.csv')))
     macro_observation.cache_clear()
     item = macro_observation('CPIAUCSL', 1)
     assert item['asOf'] == '2025-02-01'
@@ -171,6 +190,18 @@ def test_market_partial_failure_does_not_invent_macro_value():
     assert len(result['markets']) == 4
     failed = next(item for item in result['macro'] if item['id'] == 'UNRATE')
     assert not failed['available'] and 'value' not in failed
+
+
+def test_fred_transport_failures_are_visible_and_not_cached(monkeypatch, caplog):
+    def unavailable(*args, **kwargs):
+        raise TimeoutError('upstream read timeout')
+    monkeypatch.setattr('app.services.dashboard.requests.get', unavailable)
+    monkeypatch.setattr(DashboardService, 'get_quote', lambda self, symbol: {})
+    macro_observation.cache_clear()
+    result = DashboardService().market_overview()
+    assert all(not item['available'] and 'value' not in item for item in result['macro'])
+    assert macro_observation.cache_info().currsize == 0
+    assert all(f'FRED observation failed: {series}' in caplog.text for series in ['DFF','DGS10','CPIAUCSL','UNRATE'])
 
 
 @pytest.mark.parametrize('ticker,currency,name', [('005930.KS','KRW','삼성전자'), ('AAPL','USD','애플')])

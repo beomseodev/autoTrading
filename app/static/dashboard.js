@@ -30,7 +30,7 @@ function layoutChanged() {
   clearTimeout(layoutTimer);
   if (!accountSub) { state = {...state, layout: structuredClone(panelLayout)}; layoutPending = false; return; }
   backupLayoutDraft();
-  if (!cloudSaving) {
+  if (!cloudSaving && !pendingDraft) {
     try { saveState({...state, layout: structuredClone(panelLayout)}); }
     catch { /* The cloud save below can still succeed when browser storage is blocked. */ }
   }
@@ -45,6 +45,14 @@ async function savePanelLayout() {
   if (cloudLoading || cloudSaving) { layoutTimer = setTimeout(savePanelLayout, 400); return; }
   layoutPending = false;
   try {
+    if (!cloudReady || !cloudRevision || pendingDraft) {
+      if (pendingDraft) {
+        const next = {...pendingDraft.state, layout: structuredClone(panelLayout)};
+        if (!sameState(next, pendingDraft.state)) keepDraft(next);
+      } else saveState({...state, layout: structuredClone(panelLayout)});
+      $("#layout-status").textContent = "배치를 이 브라우저에 보관했습니다. 자산·목표를 계정에 저장한 뒤 배치도 동기화됩니다.";
+      return;
+    }
     await persistState({...state, layout: structuredClone(panelLayout)});
     if (layoutPending) backupLayoutDraft();
     else {
@@ -88,6 +96,9 @@ let cloudReady = false;
 let cloudRevision = null;
 let emailReady = false;
 let cloudSaving = false;
+let cloudStatus = "loading";
+let pendingDraft = null;
+let comparedCloud = null;
 
 function esc(value) {
   return String(value).replace(/[&<>"']/g, char => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[char]);
@@ -287,10 +298,135 @@ function validateGoal(value) {
 }
 function saveState(next) {
   if (!STORAGE_KEY) throw new Error("로그인 상태를 먼저 확인해주세요.");
-  if (invalidStoredValue !== null) localStorage.setItem(STORAGE_KEY + "-recovery", invalidStoredValue);
+  if (invalidStoredValue !== null) {
+    if (localStorage.getItem(STORAGE_KEY + "-recovery") === null) localStorage.setItem(STORAGE_KEY + "-recovery", invalidStoredValue);
+    else localStorage.setItem(STORAGE_KEY + "-backup:" + crypto.randomUUID(), invalidStoredValue);
+  }
   localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   invalidStoredValue = null;
   state = next;
+}
+function validateState(value) {
+  if (value?.version !== 1) throw new Error("저장 버전을 확인할 수 없습니다.");
+  validatePortfolio(value.portfolio);
+  validatePanelLayout(value.layout);
+  if (value.goal !== null) validateGoal(value.goal);
+}
+function sameState(a, b) {
+  function canonical(value) {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === "object") return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
+    return value;
+  }
+  function normalized(value) {
+    if (!value) return null;
+    const portfolio = {rebalanceTolerancePct: 5, emailAlerts: false, rebalanceGroups: [], ...value.portfolio};
+    portfolio.positions = portfolio.positions.map(p => ({targetWeight: null, ...p}));
+    portfolio.rebalanceGroups = portfolio.rebalanceGroups.map(g => ({...g, name: g.name.trim()}));
+    const layout = Object.fromEntries(Object.entries(value.layout ?? {}).map(([key, size]) => [key, {height: null, order: null, hidden: false, ...size}]));
+    return canonical({...value, portfolio, layout});
+  }
+  return JSON.stringify(normalized(a)) === JSON.stringify(normalized(b));
+}
+function storedDrafts() {
+  const drafts = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key?.startsWith(STORAGE_KEY + "-draft:")) continue;
+    try {
+      const draft = JSON.parse(localStorage.getItem(key));
+      validateState(draft.state);
+      if (key === STORAGE_KEY + "-draft:" + draft.id && typeof draft.savedAt === "string" &&
+          typeof draft.baseKnown === "boolean" && (draft.baseRevision === null || typeof draft.baseRevision === "string")) drafts.push(draft);
+    } catch { /* Keep damaged drafts untouched for backup export. */ }
+  }
+  return drafts.sort((a, b) => b.savedAt.localeCompare(a.savedAt));
+}
+function archiveDraft(draft) {
+  localStorage.setItem(STORAGE_KEY + "-backup:" + draft.id, JSON.stringify(draft));
+  localStorage.removeItem(STORAGE_KEY + "-draft:" + draft.id);
+}
+function keepDraft(next) {
+  validateState(next);
+  const previous = pendingDraft;
+  const draft = {id: crypto.randomUUID(), state: structuredClone(next), baseRevision: previous ? previous.baseRevision : cloudRevision,
+    baseKnown: previous ? previous.baseKnown : cloudReady, savedAt: new Date().toISOString()};
+  // Independent keys prevent a late response in another tab from deleting this draft.
+  try {
+    localStorage.setItem(STORAGE_KEY + "-draft:" + draft.id, JSON.stringify(draft));
+    if (previous) archiveDraft(previous);
+  } catch {
+    throw new Error("브라우저 초안을 보관하지 못했습니다. 현재 창의 입력만 남아 있습니다. 창을 닫지 말고 저장 공간·권한을 확인해주세요.");
+  }
+  pendingDraft = draft;
+  state = structuredClone(next);
+  comparedCloud = null;
+  renderRecovery();
+  return draft;
+}
+function describeState(value) {
+  if (!value) return "저장된 내용 없음";
+  const p = value.portfolio, goal = value.goal;
+  return [`표시 통화: ${p.baseCurrency}`, `현금: ${number(p.cashKRW)} KRW / ${number(p.cashUSD)} USD`,
+    ...p.positions.map(x => `${x.ticker}: ${number(x.quantity, 8)}주 / 매입가 ${number(x.averageCost, 8)} ${x.ticker.endsWith('.KS') || x.ticker.endsWith('.KQ') ? 'KRW' : 'USD'} / 목표 ${x.targetWeight ?? '없음'}%`),
+    ...(p.rebalanceGroups ?? []).map(g => `그룹 ${g.name}: ${g.tickers.join(', ')} / ${g.targetWeight}%`),
+    `허용폭: ${p.rebalanceTolerancePct ?? 5}%p / 이메일: ${p.emailAlerts ? '켜짐' : '꺼짐'}`,
+    goal ? `목표: ${number(goal.targetAmount)} ${goal.currency} / 월 ${number(goal.monthlyContribution)} / 연 ${goal.annualReturnPct}%` : '목표 없음',
+    ...Object.entries(value.layout ?? {}).map(([key, s]) => `${$(`[data-panel="${key}"]`).dataset.panelLabel || key}: 너비 ${s.span}/12, 높이 ${s.height ?? '자동'}, 순서 ${s.order ?? '기본'}, ${s.hidden ? '숨김' : '표시'}`)].join('\n');
+}
+function renderRecovery() {
+  $("#portfolio-recovery-btn").hidden = !pendingDraft;
+  $("#goal-recovery-btn").hidden = !pendingDraft;
+  $("#retry-cloud-btn").hidden = !pendingDraft && cloudStatus !== "error";
+  $("#recovery-panel").hidden = !pendingDraft;
+  $("#sync-local-btn").hidden = Boolean(pendingDraft) || !cloudReady || cloudRevision !== null;
+  $("#use-draft-btn").disabled = !comparedCloud || cloudSaving || cloudLoading;
+  $("#use-server-btn").disabled = !comparedCloud || cloudSaving || cloudLoading;
+  if (pendingDraft) {
+    $("#draft-preview").textContent = describeState(pendingDraft.state);
+    $("#server-preview").textContent = comparedCloud ? describeState(comparedCloud.state) : "계정 저장 재시도를 눌러 최신 내용을 확인해주세요.";
+    $("#draft-time").textContent = `브라우저 초안: ${new Date(pendingDraft.savedAt).toLocaleString('ko-KR')}`;
+  }
+  try {
+    const drafts = storedDrafts();
+    $("#draft-list").innerHTML = '<option value="">초안 선택</option>' + drafts.map(d => `<option value="${esc(d.id)}"${d.id === pendingDraft?.id ? ' selected' : ''}>${esc(new Date(d.savedAt).toLocaleString('ko-KR'))} · ${esc(number(d.state.portfolio.cashUSD))} USD / ${esc(number(d.state.portfolio.cashKRW))} KRW</option>`).join('');
+    $("#other-drafts").hidden = drafts.length === 0;
+  } catch { /* The current in-memory draft remains available. */ }
+}
+for (const name of ["portfolio", "goal"]) $(`#${name}-recovery-btn`).addEventListener("click", () => {
+  $(`#${name}-dialog`).close();
+  $("#recovery-panel").scrollIntoView({block: "start"});
+  $("#retry-cloud-btn").focus();
+});
+function applySavedState(next) {
+  try { saveState(next); }
+  catch { state = next; }
+  try { localStorage.setItem(STORAGE_KEY + "-synced", JSON.stringify(next)); }
+  catch { /* The server copy is authoritative after a successful save. */ }
+  if (layoutReady && !layoutPending) applyPanelLayout(next.layout ?? {});
+}
+async function writeDraft(draft, revision) {
+  cloudSaving = true;
+  renderRecovery();
+  try {
+    const result = await api("/api/dashboard/state", {state: draft.state, revision});
+    if (typeof result.revision !== "string" || !result.revision) throw new Error("저장 결과를 확인하지 못했습니다.");
+    cloudRevision = result.revision;
+    cloudReady = true;
+    cloudStatus = "ready";
+    applySavedState(draft.state);
+    try { localStorage.removeItem(STORAGE_KEY + "-draft:" + draft.id); }
+    catch { /* A retained draft is verified against the server on manual retry. */ }
+    if (pendingDraft?.id === draft.id) pendingDraft = null;
+    comparedCloud = null;
+    $("#cloud-status").textContent = "자산·목표·배치를 계정에 저장했습니다. 다른 기기에서도 불러올 수 있습니다.";
+  } catch (error) {
+    cloudReady = false;
+    cloudStatus = "error";
+    comparedCloud = null;
+    $("#cloud-status").textContent = `계정 저장 결과를 확인하지 못했습니다. 초안을 이 브라우저에 보관했습니다. 계정 저장 재시도를 눌러주세요. ${error.message}`;
+    throw error;
+  } finally { cloudSaving = false; renderRecovery(); }
 }
 function restoreState() {
   let raw;
@@ -347,48 +483,119 @@ async function persistState(next) {
     renderEmailStatus();
     return;
   }
-  cloudSaving = true;
-  try {
-    if (cloudReady) {
-      const result = await api("/api/dashboard/state", {state: next, revision: cloudRevision});
-      cloudRevision = result.revision;
-      $("#cloud-status").textContent = "자산·목표를 계정에 저장했습니다. 다른 기기에서도 불러올 수 있습니다.";
-    }
-    try { saveState(next); }
-    catch (error) {
-      if (!cloudReady) throw error;
-      state = next;
-      $("#cloud-status").textContent = "계정 저장은 완료됐지만 브라우저 백업을 저장하지 못했습니다.";
-    }
-    $("#sync-local-btn").hidden = true;
-    renderEmailStatus();
-  } finally { cloudSaving = false; }
+  const unresolved = Boolean(pendingDraft);
+  const draft = keepDraft(next);
+  if (!cloudReady || unresolved) {
+    const message = "계정에 아직 저장되지 않았습니다. 초안을 이 브라우저에 보관했습니다. 계정 저장 재시도로 확인해주세요.";
+    $("#cloud-status").textContent = message;
+    throw new Error(message);
+  }
+  await writeDraft(draft, cloudRevision);
+  renderEmailStatus();
 }
 async function loadCloudState() {
+  if (cloudSaving || (cloudLoading && cloudStatus !== "loading")) return;
+  cloudLoading = true;
+  comparedCloud = null;
+  renderRecovery();
   try {
     const result = await api("/api/dashboard/state");
-    cloudReady = result.configured;
+    if (result.state) validateState(result.state);
+    if (result.configured && (result.state ? typeof result.revision !== "string" || !result.revision : result.revision !== null)) throw new Error("계정 저장 버전을 확인하지 못했습니다.");
+    cloudReady = result.configured === true;
+    cloudStatus = cloudReady ? "ready" : "unconfigured";
     emailReady = result.emailReady;
     cloudRevision = result.revision;
-    if (result.state) {
-      validatePortfolio(result.state.portfolio);
-      validatePanelLayout(result.state.layout);
-      if (result.state.goal !== null) validateGoal(result.state.goal);
-      try {
-        const previous = localStorage.getItem(STORAGE_KEY);
-        if (previous && previous !== JSON.stringify(result.state) && !localStorage.getItem(STORAGE_KEY + "-before-cloud")) localStorage.setItem(STORAGE_KEY + "-before-cloud", previous);
-        saveState(result.state);
-      } catch { state = result.state; }
-    } else if (cloudReady) {
-      $("#sync-local-btn").hidden = !state.portfolio.positions.length && !state.portfolio.cashKRW && !state.portfolio.cashUSD && !state.goal;
+    if (!pendingDraft && result.state && !sameState(state, result.state)) {
+      const previous = localStorage.getItem(STORAGE_KEY);
+      const synced = JSON.parse(localStorage.getItem(STORAGE_KEY + "-synced") || "null");
+      if (previous && !invalidStoredValue && !sameState(state, synced)) {
+        // Legacy browser values have no reliable revision; never silently replace them.
+        keepDraft(state);
+        pendingDraft.baseKnown = false;
+        localStorage.setItem(STORAGE_KEY + "-draft:" + pendingDraft.id, JSON.stringify(pendingDraft));
+      }
     }
-    $("#cloud-status").textContent = cloudReady ? result.state ? "계정에 저장된 자산·목표를 불러왔습니다. 수정 시 다른 기기에도 반영됩니다." : "계정에 저장된 정보가 없습니다. 기존 브라우저 정보는 자동으로 업로드하지 않습니다." : "서버 저장 설정 전입니다. 현재 브라우저에만 저장하며 이메일 점검에는 반영되지 않습니다.";
+    if (pendingDraft) {
+      comparedCloud = cloudReady ? result : null;
+      $("#cloud-status").textContent = cloudReady ? "계정에 아직 저장되지 않은 초안이 있습니다. 내용을 비교한 뒤 계정 저장 재시도 또는 사용할 내용을 선택해주세요." : "서버 저장 설정 전입니다. 초안은 이 브라우저에만 보관되어 있습니다.";
+    } else {
+      if (result.state) applySavedState(result.state);
+      $("#cloud-status").textContent = cloudReady ? result.state ? "계정에 저장된 자산·목표를 불러왔습니다. 수정 시 다른 기기에도 반영됩니다." : "계정에 저장된 정보가 없습니다. 기존 브라우저 정보는 자동으로 업로드하지 않습니다." : "서버 저장 설정 전입니다. 계정 저장을 사용할 수 없습니다.";
+    }
     renderEmailStatus(result.notificationStatus);
+    return result;
   } catch (error) {
     cloudReady = false;
+    cloudStatus = "error";
     $("#cloud-status").textContent = `계정 정보를 불러오지 못했습니다. 기존 브라우저 정보는 보존했습니다. ${error.message}`;
-  } finally { cloudLoading = false; }
+  } finally { cloudLoading = false; renderRecovery(); }
 }
+async function retryCloudSave() {
+  if (cloudLoading || cloudSaving) return;
+  const result = await loadCloudState();
+  if (!result?.configured || !pendingDraft) return;
+  const draft = pendingDraft;
+  if (sameState(draft.state, result.state)) {
+    applySavedState(result.state);
+    localStorage.removeItem(STORAGE_KEY + "-draft:" + draft.id);
+    pendingDraft = null;
+    comparedCloud = null;
+    $("#cloud-status").textContent = "이 초안이 이미 계정에 저장되어 있음을 확인했습니다.";
+  } else if (draft.baseKnown && draft.baseRevision === result.revision) {
+    await writeDraft(draft, result.revision);
+  } else {
+    $("#cloud-status").textContent = "계정 내용과 초안의 저장 기준이 다르거나 확인되지 않았습니다. 아래 두 내용을 비교해 선택해주세요.";
+  }
+  renderRecovery();
+  loadPortfolio();
+}
+$("#retry-cloud-btn").addEventListener("click", async () => {
+  try { await retryCloudSave(); } catch (error) { message(error.message); }
+});
+$("#use-draft-btn").addEventListener("click", async () => {
+  if (!pendingDraft || !comparedCloud || cloudSaving || cloudLoading) return;
+  try { await writeDraft(pendingDraft, comparedCloud.revision); loadPortfolio(); }
+  catch (error) { message(error.message); }
+});
+$("#use-server-btn").addEventListener("click", () => {
+  if (!pendingDraft || !comparedCloud || cloudSaving || cloudLoading) return;
+  try {
+    archiveDraft(pendingDraft);
+    const next = comparedCloud.state ?? emptyState();
+    pendingDraft = null;
+    comparedCloud = null;
+    layoutPending = false;
+    applySavedState(next);
+    $("#cloud-status").textContent = "계정 내용을 사용합니다. 선택하지 않은 초안은 브라우저 복구본에 보관했습니다.";
+    renderRecovery();
+    loadPortfolio();
+  } catch { message("초안을 복구본에 보관하지 못해 계정 내용으로 전환하지 않았습니다."); }
+});
+$("#draft-list").addEventListener("change", () => {
+  if (cloudSaving || cloudLoading) return;
+  const draft = storedDrafts().find(d => d.id === $("#draft-list").value);
+  if (draft) {
+    pendingDraft = draft;
+    state = structuredClone(draft.state);
+    comparedCloud = null;
+    renderRecovery();
+    applyPanelLayout(state.layout ?? {});
+    loadPortfolio();
+  }
+});
+$("#download-backup-btn").addEventListener("click", () => {
+  try {
+    const backup = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key === STORAGE_KEY || key?.startsWith(STORAGE_KEY + '-')) backup[key] = localStorage.getItem(key);
+    }
+    const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], {type: "application/json"}));
+    const link = document.createElement('a'); link.href = url; link.download = 'portfolio-backup.json'; link.click();
+    URL.revokeObjectURL(url);
+  } catch { message("브라우저 복구본을 내보내지 못했습니다. 저장소 접근 권한을 확인해주세요."); }
+});
 $("#sync-local-btn").addEventListener("click", async () => {
   $("#sync-local-btn").disabled = true;
   try { await persistState(state); $("#cloud-status").textContent = "이 브라우저의 자산·목표를 계정에 저장했습니다."; }
@@ -812,6 +1019,11 @@ async function initializeAccount() {
       } catch { /* Browser storage may be disabled; server storage still works. */ }
     }
     restoreState();
+    try {
+      pendingDraft = storedDrafts()[0] ?? null;
+      if (pendingDraft) state = structuredClone(pendingDraft.state);
+    } catch { /* A blocked browser store is reported when saving is attempted. */ }
+    $("#download-backup-btn").hidden = false;
     loadMarkets();
     await loadCloudState();
     setupDashboardLayout();

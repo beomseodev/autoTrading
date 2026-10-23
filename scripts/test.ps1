@@ -16,4 +16,6 @@ if (-not (Test-Path $py)) {
 }
 
 & $py -m pytest @RemainingArguments
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& node --test tests/*.cjs
 exit $LASTEXITCODE

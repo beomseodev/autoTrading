@@ -13,4 +13,5 @@ if [[ ! -x "$PY" ]]; then
   exit 1
 fi
 
-exec "$PY" -m pytest "$@"
+"$PY" -m pytest "$@"
+exec node --test tests/*.cjs

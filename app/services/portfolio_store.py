@@ -21,8 +21,9 @@ class PortfolioStore:
 
     def read(self, name):
         try:
+            # Compression weakens the ETag, which cannot be used for conditional writes.
             response = httpx.get(self.base + "/" + quote(name, safe="/"), params={"cache": "0"},
-                                 headers=self.headers, timeout=15)
+                                 headers={**self.headers, "Accept-Encoding": "identity"}, timeout=15)
             if response.status_code == 404:
                 return None, None
             response.raise_for_status()
@@ -42,7 +43,7 @@ class PortfolioStore:
                                  headers=headers, json=value, timeout=15)
             if response.status_code in (409, 412) or (response.status_code == 400 and
                     response.json().get("error", {}).get("message", "").startswith("This blob already exists")):
-                raise HTTPException(409, "다른 기기에서 정보가 변경되었습니다. 입력을 보관하고 새로고침 후 다시 확인해주세요.")
+                raise HTTPException(409, "다른 기기에서 정보가 변경되었습니다. 계정 저장 재시도로 최신 내용과 초안을 비교해주세요.")
             response.raise_for_status()
             return response.json()["etag"]
         except (httpx.HTTPError, KeyError, ValueError):

@@ -62,11 +62,12 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
       const accountTest = location.hash === '#layout-account-test';
       if (url === '/auth/session') result = {user:accountTest ? {sub:'layout-browser-fixture',email:'layout-test@example.invalid'} : null, isOwner:false};
       else if (url === '/api/dashboard/state' && accountTest) {
+        if (sessionStorage.getItem('recovery-offline')) return {ok:false,status:503,json:async()=>({detail:'검증용 연결 장애'})};
         if (options?.method === 'POST') {
           const body = JSON.parse(options.body);
           sessionStorage.setItem('layout-fixture-state',JSON.stringify(body.state));
           result = {revision:'fixture-r1'};
-        } else result = {configured:true,emailReady:false,revision:'fixture-r1',state:JSON.parse(sessionStorage.getItem('layout-fixture-state') || 'null')};
+        } else result = {configured:true,emailReady:false,revision:'fixture-r1',state:JSON.parse(sessionStorage.getItem('layout-fixture-state') || '{"version":1,"portfolio":{"positions":[],"cashKRW":0,"cashUSD":0,"baseCurrency":"KRW"},"goal":null,"portfolioSavedAt":null}')};
       }
       else if (url === '/api/dashboard/markets') result = {markets:[1,2,3,4].map(i => ({label:'Market '+i, value:100, changePct:1, asOf:'2026-10-22', available:true, source:'#'})), macro:[]};
       else if (url === '/api/dashboard/portfolio') result = {holdings:[], complete:true, hasAssets:false, totalValue:0, cashValue:0, baseCurrency:'KRW', fetchedAt:new Date().toISOString(), dayChange:null};
@@ -258,7 +259,35 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.equal(await evaluate('document.querySelector("[data-panel=macro]").hidden'),true);
     assert.equal(await evaluate('document.querySelector("[data-panel=performance]").hidden'),false);
     assert.equal(await evaluate('panelLayout.goal.height'),500);
-    await evaluate('sessionStorage.removeItem("layout-fixture-state"); localStorage.removeItem("portfolio-dashboard-v1:layout-browser-fixture")');
+    await evaluate(`sessionStorage.setItem('recovery-offline','1'); openPortfolio();
+      document.querySelector('#portfolio-form [name=cashUSD]').value='200';
+      document.querySelector('#portfolio-form').requestSubmit();`);
+    await delay(150);
+    assert.equal(await evaluate('document.querySelector("#portfolio-dialog").open'),true);
+    assert.equal(await evaluate('pendingDraft.state.portfolio.cashUSD'),200);
+    await evaluate('document.querySelector("#portfolio-recovery-btn").click()');
+    assert.equal(await evaluate('document.querySelector("#portfolio-dialog").open'),false);
+    assert.match(await evaluate('document.querySelector("#cloud-status").textContent'),/초안/);
+    await evaluate('sessionStorage.removeItem("recovery-offline"); window.__reloadMarker=true');
+    await send('Page.reload');
+    for (let attempt=0;attempt<100;attempt++) {
+      if (await evaluate('!window.__reloadMarker && typeof layoutReady!=="undefined" && layoutReady && !cloudLoading')) break;
+      await delay(50);
+    }
+    assert.equal(await evaluate('state.portfolio.cashUSD'),200);
+    assert.match(await evaluate('document.querySelector("#draft-preview").textContent'),/200 USD/);
+    assert.match(await evaluate('document.querySelector("#server-preview").textContent'),/0 USD/);
+    await evaluate('document.querySelector("#recovery-panel").scrollIntoView({block:"start"})');
+    assert(await evaluate('document.documentElement.scrollWidth <= innerWidth'), 'Recovery view overflows on mobile');
+    fs.writeFileSync('output/recovery-mobile.png',Buffer.from((await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false})).data,'base64'));
+    await send('Emulation.setDeviceMetricsOverride', {width:1280,height:1000,deviceScaleFactor:1,mobile:false});
+    await delay(100);
+    fs.writeFileSync('output/recovery-desktop.png',Buffer.from((await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false})).data,'base64'));
+    await evaluate('document.querySelector("#use-server-btn").focus(); document.querySelector("#use-server-btn").click()');
+    assert.equal(await evaluate('state.portfolio.cashUSD'),0);
+    assert.equal(await evaluate('pendingDraft'),null);
+    assert(await evaluate('Object.keys(localStorage).some(k=>k.startsWith(STORAGE_KEY+"-backup:"))'));
+    await evaluate('sessionStorage.removeItem("layout-fixture-state"); Object.keys(localStorage).filter(k=>k.startsWith(STORAGE_KEY)).forEach(k=>localStorage.removeItem(k))');
     assert.deepEqual(errors, []);
     console.log('Real Chrome: resizing, compact summaries, partial-data warnings, responsive table columns, scenario detail, chart height, no extra requests and desktop/mobile overflow passed.');
   } finally {

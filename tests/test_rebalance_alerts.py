@@ -242,6 +242,7 @@ def test_cloud_save_requires_matching_revision_and_preserves_values(memory_store
     assert client.post('/api/dashboard/state', json={'state': state}).status_code == 409
     changed = deepcopy(state)
     changed['portfolio']['cashUSD'] = 100
+    assert client.post('/api/dashboard/state', json={'state': changed, 'revision': ''}).status_code == 422
     assert client.post('/api/dashboard/state', json={'state': changed, 'revision': 'stale'}).status_code == 409
     assert records['dashboard.json'] == state
     assert client.post('/api/dashboard/state', json={'state': changed, 'revision': first}).status_code == 200
