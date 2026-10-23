@@ -71,6 +71,8 @@ def provider_get(path, params, cost=1):
             raise DataPending("provider_unavailable")
         response.raise_for_status()
         payload = response.json()
+        if not isinstance(payload, dict):
+            raise DataPending("invalid_provider_data", False)
         if payload.get("status") == "error":
             code = int(payload.get("code", 500))
             raise DataPending("provider_rate_limited" if code == 429 else "provider_rejected", code == 429 or code >= 500)
@@ -84,7 +86,9 @@ def resolve_instrument(symbol):
     if not re.fullmatch(r"(?:[A-Z][A-Z0-9.-]{0,14}|\d{6}\.(?:KS|KQ))", symbol):
         raise HTTPException(422, "미국 종목 코드 또는 005930.KS 형식으로 입력해주세요.")
     suffix = "XKRX" if symbol.endswith(".KS") else "XKOS" if symbol.endswith(".KQ") else None
-    provider_symbol = symbol[:-3] if suffix else symbol
+    if not suffix:
+        symbol = symbol.replace(".", "-")
+    provider_symbol = symbol[:-3] if suffix else symbol.replace("-", ".")
     try:
         result = provider_get("symbol_search", {"symbol": provider_symbol, "outputsize": 120})
         matches = [x for x in result.get("data", []) if x.get("symbol") == provider_symbol and

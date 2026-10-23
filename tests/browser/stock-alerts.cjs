@@ -35,8 +35,8 @@ const server = http.createServer((req,res)=>{
       else if(url==='/api/alerts/settings')data={...fixture,revision:1,email:'test@example.com',consent:false,sendingEnabled:false};
       else if(url==='/api/alerts/watchlist'){if(method==='POST'){if(rejectSave)return {ok:false,json:async()=>({detail:'종목 조회 실패. 입력은 유지됩니다.'})};watch.push({id:'watch-1',instrumentId:'instrument-1',symbol:body.symbol,metadata:{name:'<img src=x onerror=alert(1)>',mic:'ARCX',currency:'USD'}});}data={items:watch,...watch.at(-1)};}
       else if(url==='/api/alerts/rules'){if(method==='POST')rules.push({id:'rule-1',symbol:'SCHD',kind:body.type,params:body.params,name:body.name,revision:1,enabled:true});data={items:rules,ids:['rule-1']};}
-      else if(url==='/api/alerts/rules/rule-1'){if(method==='PATCH')Object.assign(rules[0],body);if(method==='DELETE')rules=[];}
-      return {ok:true,status:200,json:async()=>data};};`});
+      else if(url==='/api/alerts/rules/rule-1'){if(method==='PATCH')Object.assign(rules[0],body,{revision:rules[0].revision+1});if(method==='DELETE')rules=[];}
+      return {ok:true,status:200,json:async()=>structuredClone(data)};};`});
     await send('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
     await send('Page.navigate',{url:'http://127.0.0.1:8779/alerts'});
     await until("!document.getElementById('loading').hidden");
@@ -52,6 +52,12 @@ const server = http.createServer((req,res)=>{
     assert.equal(await run("calls.find(c=>c.url==='/api/alerts/rules'&&c.method==='POST').headers['X-Portfolio-Account']"),'test-user');
     await run("document.querySelector('#rules button').click()");
     await until("rules[0].enabled===false && document.getElementById('loading').hidden");
+    await run("document.querySelectorAll('#rules button')[1].click();document.getElementById('rule-name').value='보존할 초안';rules[0].revision++;rules[0].params.period=50;document.getElementById('refresh').click()");
+    await until("!document.getElementById('resolve-edit').hidden && document.getElementById('loading').hidden");
+    assert.equal(await run("document.getElementById('rule-name').value"),'보존할 초안');
+    await run("window.confirm=()=>true;document.getElementById('resolve-edit').click();document.getElementById('rule-form').requestSubmit()");
+    await until("document.getElementById('status').textContent==='규칙을 저장했습니다.' && document.getElementById('loading').hidden");
+    assert.equal(await run("JSON.parse(calls.filter(c=>c.url==='/api/alerts/rules/rule-1'&&c.method==='PATCH').at(-1).body).revision"),3);
     await run("rejectSave=true;document.getElementById('symbol').value='TQQQ';document.getElementById('watch-form').requestSubmit()");
     await until("document.getElementById('status').textContent.includes('종목 조회 실패')");
     assert.equal(await run("document.getElementById('symbol').value"),'TQQQ');

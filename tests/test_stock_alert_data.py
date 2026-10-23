@@ -49,3 +49,25 @@ def test_confirmed_halt_does_not_invent_a_bar():
         parse_snapshot(META, prices, splits, date(2026, 10, 22))
     snap = parse_snapshot(META, prices, splits, date(2026, 10, 22), ["2026-10-21"])
     assert len(snap["raw"]) == 2
+
+
+def test_canonical_share_class_mapping(monkeypatch):
+    from app.services import alert_data
+    requests=[]
+    def search(path, params):
+        requests.append(params)
+        return {"data":[{"symbol":"BRK.B","mic_code":"XNYS","currency":"USD","country":"United States",
+                         "exchange_timezone":"America/New_York","instrument_type":"Common Stock","instrument_name":"Berkshire"}]}
+    monkeypatch.setattr(alert_data,"provider_get",search)
+    assert alert_data.resolve_instrument("BRK-B")["providerSymbol"] == "BRK.B"
+    assert alert_data.resolve_instrument("BRK.B")["symbol"] == "BRK-B"
+
+
+def test_provider_malformed_response_is_deferred(monkeypatch):
+    import httpx
+    from app.services import alert_data
+    monkeypatch.setenv("TWELVE_DATA_API_KEY","fixture-key")
+    monkeypatch.setattr(alert_data,"reserve_credits",lambda *_:None)
+    monkeypatch.setattr(alert_data.httpx,"get",lambda *args,**kwargs:httpx.Response(200,json=[],request=httpx.Request("GET","https://example.com")))
+    with pytest.raises(DataPending,match="invalid_provider_data"):
+        alert_data.provider_get("time_series",{})

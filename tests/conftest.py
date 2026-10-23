@@ -16,6 +16,11 @@ os.environ["BLOB_READ_WRITE_TOKEN"] = ""
 os.environ["GMAIL_APP_PASSWORD"] = ""
 os.environ["CRON_SECRET"] = ""
 os.environ["GOOGLE_OWNER_SUB"] = ""
+for alert_key in ("ALERT_DATABASE_URL", "ALERT_MIGRATION_DATABASE_URL", "TWELVE_DATA_API_KEY",
+                  "RESEND_API_KEY", "ALERT_EMAIL_FROM", "RESEND_WEBHOOK_SECRET", "ALERT_UNSUBSCRIBE_SECRET"):
+    os.environ[alert_key] = ""
+os.environ["TWELVE_DATA_CREDITS_PER_MINUTE"] = "0"
+os.environ["STOCK_ALERTS_SEND_ENABLED"] = "false"
 
 
 def session_cookie(user=None):

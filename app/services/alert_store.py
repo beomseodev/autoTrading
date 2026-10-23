@@ -78,9 +78,9 @@ def check_revision(row, revision):
 def legacy_consolidated():
     """Only called for configured deployments; failure must defer old mail."""
     with database() as conn:
-        row = conn.execute("SELECT legacy_consolidated FROM alert_users WHERE lower(email)=lower(%s)",
-                           (os.getenv("GOOGLE_OWNER_EMAIL", ""),)).fetchone()
-        return bool(row and row["legacy_consolidated"])
+        # Only the operator can acquire this marker. Keep it effective after email erasure.
+        row = conn.execute("SELECT EXISTS(SELECT 1 FROM alert_users WHERE legacy_consolidated) AS migrated").fetchone()
+        return row["migrated"]
 
 
 def json_value(value):

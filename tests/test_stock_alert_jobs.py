@@ -212,3 +212,31 @@ def test_concurrent_receipt_and_send_result_serialize(db, monkeypatch):
         second = pool.submit(completion); release.set()
         first.result(timeout=10); second.result(timeout=10)
     assert client.get("/api/alerts/settings").json()["suppressed"] == "bounced"
+
+
+def test_deleting_alerts_never_revives_legacy_mail(db, monkeypatch):
+    from app.services.alert_store import legacy_consolidated
+    from app.services.notification_jobs import run_notification
+    client, _ = prepare(monkeypatch)
+    assert legacy_consolidated()
+    assert client.delete("/api/alerts/account").status_code == 200
+    assert legacy_consolidated()
+    assert run_notification()["outcome"] == "consolidated"
+
+
+@pytest.mark.parametrize("first_state,expected", [("retryable_failed","pending"),("unknown","no_signals")])
+def test_next_day_releases_only_definite_nonacceptance(db, monkeypatch, first_state, expected):
+    import time
+    client, _ = prepare(monkeypatch)
+    monkeypatch.setattr(jobs,"send_payload",lambda *_:(first_state,None,600))
+    jobs.process_alert_run(now=NOW)
+    later = NOW+timedelta(days=1)
+    monkeypatch.setattr(jobs,"utcnow",lambda:later)
+    run,token=jobs.initialize(later)
+    with database() as conn:
+        conn.execute("UPDATE alert_tasks SET status='done' WHERE run_id=%s",(run["id"],))
+    jobs.prepare_digests(run,token,later,time.monotonic())
+    with database() as conn:
+        row=conn.execute("SELECT * FROM alert_digests WHERE digest_date=%s",(run["digest_date"],)).fetchone()
+        assert row["status"]==expected
+        assert len(row["payload"]["eventIds"])==(1 if first_state=="retryable_failed" else 0)
