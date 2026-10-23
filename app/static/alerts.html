@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>종가 기준 관심종목 알림</title>
+  <link rel="stylesheet" href="/static/dashboard.css"><link rel="stylesheet" href="/static/loading.css">
+  <link rel="stylesheet" href="/static/alerts.css"><script src="/static/alerts.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar"><a class="brand" href="/">PORTFOLIO</a><nav aria-label="주 메뉴"><a href="/">대시보드</a><a class="active" aria-current="page" href="/alerts">관심종목 알림</a><a href="/lab">포트폴리오 실험실</a></nav></aside>
+  <main class="workspace alerts-workspace">
+    <header class="page-header"><div><p class="eyebrow">CLOSING PRICE ALERTS</p><h1>관심종목 알림</h1><p>보유하지 않은 종목도 정규장 종가로 확인한 새 신호를 받으세요.</p></div><button id="refresh" class="button quiet">새로고침</button></header>
+    <p id="loading" class="loading-indicator" role="status" hidden>알림 데이터를 불러오는 중…</p>
+    <p id="status" role="status" aria-live="polite"></p>
+    <section id="login-note" class="card" hidden><h2>Google 로그인 후 사용할 수 있습니다</h2><p>국내·미국 주식과 ETF의 종가 조건을 저장하고, 새 신호가 있는 날 오전 8시대에 한 통으로 받습니다. 로그인만으로 메일을 구독하지 않습니다.</p><a class="button primary" href="/login">Google로 로그인</a></section>
+    <div id="content" hidden>
+      <section class="card"><h2>메일 수신 설정</h2><p id="email"></p><p>한국시간 오전 8시대 점검 · 새 신호가 있는 날만 한 통 · 거래소 현지 거래일 표시</p>
+        <p id="delivery-note" class="card-note"></p><p>운영자 계정은 통합 발송 활성화 후 기존 리밸런싱 알림도 같은 메일로 받습니다. 해지 후 기존 별도 메일은 다시 켜지지 않습니다.</p>
+        <form id="settings-form"><label><input type="checkbox" id="consent"> 본인 이메일로 종가 알림을 받는 데 동의합니다</label><button class="button primary">수신 설정 저장</button></form>
+        <button id="email-test" class="button quiet">본인에게 테스트 메일</button>
+      </section>
+      <section class="card"><h2>관심종목</h2><p>미국은 SCHD, TQQQ, QQQI · 한국은 005930.KS, 247540.KQ 형식으로 입력하세요.</p>
+        <form id="watch-form"><label for="symbol">종목 코드·이름 검색</label><input id="symbol" list="symbol-results" maxlength="80" placeholder="SCHD 또는 종목명" required autocomplete="off"><datalist id="symbol-results"></datalist><button class="button primary">관심종목 추가</button></form>
+        <button id="import-holdings" class="button quiet">보유 종목 가져오기</button><p class="card-note">아래에서 종목을 선택하면 같은 규칙을 일괄 등록할 수 있습니다. 가져와도 기존 자산은 변경되지 않습니다.</p>
+        <ul id="watchlist" class="alert-list"></ul>
+      </section>
+      <section class="card"><h2 id="rule-heading">조건 등록</h2>
+        <label for="template">빠른 설정</label><select id="template"><option value="">직접 설정</option><option value="ma200">200일 SMA 양방향 돌파</option><option value="ma50">50일·200일 SMA 교차</option><option value="change">일간 ±5%</option><option value="rsi30">RSI 30 하향 진입</option><option value="rsi70">RSI 70 상향 진입</option></select>
+        <form id="rule-form"><label for="rule-name">조건 이름 (선택)</label><input id="rule-name" maxlength="100"><label for="kind">알림 종류</label><select id="kind"></select><div id="params" class="params-grid"></div><p id="rule-meaning" class="card-note"></p><label><input id="restore-archived" type="checkbox"> 보관된 동일 조건이 있으면 새 적용 시점으로 재사용</label><button id="save-rule" class="button primary">선택 종목에 규칙 등록</button><button id="cancel-edit" class="button quiet" type="button" hidden>수정 취소</button><button id="resolve-edit" class="button quiet" type="button" hidden>최신 설정 확인 후 내 입력 유지</button></form>
+        <p class="card-note">교차는 전일 선 이하에서 당일 선 위로, 또는 전일 선 이상에서 당일 선 아래로 이동했을 때입니다. 선에 닿거나 같은 방향에 머무르면 새 돌파가 아닙니다. EMA는 최초 종가에서 시작하며 볼린저 표준편차는 ddof=0입니다. 거래량 급증·신고저가·일간 급등락은 충족한 거래일마다 기록합니다.</p>
+      </section>
+      <section class="card"><h2>등록한 규칙과 최근 판정</h2><p>등록·재개·조건 변경 전에 끝난 신호는 메일로 보내지 않습니다. 정지 기간의 신호도 소급하지 않습니다.</p><ul id="rules" class="alert-list"></ul></section>
+      <section class="card"><h2>신호 이력</h2><ul id="events" class="alert-list"></ul><button id="more-events" class="button quiet" hidden>이전 신호 더 보기</button></section>
+      <section class="card"><h2>일별 발송 결과</h2><p class="card-note">접수는 메일 공급자가 요청을 받았다는 뜻이며 수신함 도착과 다릅니다.</p><ul id="digests" class="alert-list"></ul><button id="more-digests" class="button quiet" hidden>이전 결과 더 보기</button></section>
+      <section class="card"><h2>알림 데이터 삭제</h2><p>관심종목·조건·신호와 발송 이력을 삭제하고 수신을 중지합니다. 대시보드의 보유자산·목표는 유지합니다.</p><button id="delete-account" class="button quiet">내 알림 데이터 삭제</button></section>
+    </div>
+  </main>
+</body></html>

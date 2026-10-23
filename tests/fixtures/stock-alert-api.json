@@ -1,0 +1,92 @@
+{
+  "types": [
+    {
+      "type": "price_ma_cross",
+      "label": "종가와 이동평균 교차",
+      "defaults": {
+        "direction": "both",
+        "average": "sma",
+        "period": 200
+      }
+    },
+    {
+      "type": "ma_cross",
+      "label": "이동평균선 교차",
+      "defaults": {
+        "direction": "both",
+        "average": "sma",
+        "shortPeriod": 50,
+        "longPeriod": 200
+      }
+    },
+    {
+      "type": "price_cross",
+      "label": "지정가격 돌파",
+      "defaults": {
+        "direction": "both",
+        "price": 100.0
+      }
+    },
+    {
+      "type": "daily_change",
+      "label": "일간 급등락",
+      "defaults": {
+        "direction": "both",
+        "thresholdPct": 5
+      }
+    },
+    {
+      "type": "rsi_cross",
+      "label": "RSI 교차",
+      "defaults": {
+        "direction": "down",
+        "period": 14,
+        "level": 30
+      }
+    },
+    {
+      "type": "range_breakout",
+      "label": "기간 신고가·신저가",
+      "defaults": {
+        "direction": "both",
+        "period": 252
+      }
+    },
+    {
+      "type": "volume_spike",
+      "label": "거래량 급증",
+      "defaults": {
+        "period": 20,
+        "multiple": 2
+      }
+    },
+    {
+      "type": "macd_cross",
+      "label": "MACD 교차",
+      "defaults": {
+        "direction": "both",
+        "fastPeriod": 12,
+        "slowPeriod": 26,
+        "signalPeriod": 9,
+        "crossMode": "signal"
+      }
+    },
+    {
+      "type": "bollinger_cross",
+      "label": "볼린저밴드 돌파·복귀",
+      "defaults": {
+        "period": 20,
+        "stddev": 2,
+        "event": "upper_exit"
+      }
+    },
+    {
+      "type": "drawdown_cross",
+      "label": "고점 대비 낙폭 진입",
+      "defaults": {
+        "period": 60,
+        "thresholdPct": 10
+      }
+    }
+  ]
+}
