@@ -1,0 +1,14 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "fastapi",
+  "crons": [
+    {"path": "/api/cron/rebalance", "schedule": "0 1 * * *"},
+    {"path": "/api/cron/stock-alerts", "schedule": "*/5 23 * * *"}
+  ],
+  "functions": {
+    "app/main.py": {
+      "maxDuration": 300,
+      "excludeFiles": "{tests/**,scripts/**,.team-review/**,output/**,*.log,.env,.env.*}"
+    }
+  }
+}
