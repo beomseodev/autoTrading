@@ -8,6 +8,7 @@ load_dotenv()
 
 from app.auth import install_auth
 from app.dashboard_state import router as state_router
+from app.stock_alerts import router as alerts_router
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -39,6 +40,7 @@ app = FastAPI(title="Portfolio Dashboard", version="0.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 install_auth(app)
 app.include_router(state_router)
+app.include_router(alerts_router)
 
 
 @app.get("/login")
