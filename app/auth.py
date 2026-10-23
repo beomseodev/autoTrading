@@ -53,7 +53,9 @@ def install_auth(app):
 
     @app.middleware("http")
     async def protect(request: Request, call_next):
-        cron = request.url.path == "/api/cron/rebalance"
+        cron = request.url.path in ("/api/cron/rebalance", "/api/cron/stock-alerts")
+        signed_callback = (request.method == "POST" and request.url.path == "/api/webhooks/alert-email")
+        unsubscribe = request.url.path.startswith("/notifications/unsubscribe/")
         cron_secret = os.getenv("CRON_SECRET", "")
         user = request.session.get("user")
         authenticated = is_authenticated(user)
@@ -62,12 +64,12 @@ def install_auth(app):
         if cron and (not cron_secret or not secrets.compare_digest(
                 request.headers.get("authorization", "").encode(), ("Bearer " + cron_secret).encode())):
             response = JSONResponse({"detail": "예약 점검 인증이 필요합니다."}, status_code=401)
-        elif private and not cron and not authenticated:
+        elif private and not cron and not signed_callback and not authenticated:
             response = (JSONResponse({"detail": "로그인이 필요합니다."}, status_code=401)
                         if request.url.path.startswith("/api/") else RedirectResponse("/login", status_code=303))
-        elif request.url.path.startswith("/api/") and not cron and request.headers.get("x-portfolio-account") is not None and request.headers["x-portfolio-account"] != (user["sub"] if authenticated else None):
+        elif request.url.path.startswith("/api/") and not cron and not signed_callback and request.headers.get("x-portfolio-account") is not None and request.headers["x-portfolio-account"] != (user["sub"] if authenticated else None):
             response = JSONResponse({"detail": "로그인 계정이 변경되었습니다. 새로고침해주세요."}, status_code=409)
-        elif request.method not in ("GET", "HEAD", "OPTIONS") and request.headers.get("origin") != os.getenv("APP_BASE_URL", "").rstrip("/"):
+        elif request.method not in ("GET", "HEAD", "OPTIONS") and not signed_callback and not unsubscribe and request.headers.get("origin") != os.getenv("APP_BASE_URL", "").rstrip("/"):
             response = JSONResponse({"detail": "요청 출처를 확인할 수 없습니다."}, status_code=403)
         else:
             response = await call_next(request)

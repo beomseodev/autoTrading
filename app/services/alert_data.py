@@ -5,6 +5,7 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from hashlib import sha256
+from pathlib import Path
 
 import exchange_calendars as xcals
 import httpx
@@ -102,7 +103,7 @@ def resolve_instrument(symbol):
         raise HTTPException(503, "종목 검증을 완료하지 못했습니다: " + exc.code) from None
 
 
-def parse_snapshot(meta, prices, splits, target):
+def parse_snapshot(meta, prices, splits, target, confirmed_halts=()):
     for payload in (prices, splits):
         info = payload.get("meta", {})
         if (info.get("symbol") != meta["providerSymbol"] or info.get("mic_code") != meta["mic"] or
@@ -123,11 +124,13 @@ def parse_snapshot(meta, prices, splits, target):
             if day <= target:
                 raw.append({"date": day.isoformat(), **values})
         raw.sort(key=lambda x: x["date"])
+        if target.isoformat() in confirmed_halts:
+            raise DataPending("confirmed_suspension")
         if not raw or raw[-1]["date"] != target.isoformat():
             raise DataPending("latest_bar_pending")
         cal = calendar(meta["calendar"], target.year)
         sessions = {x.date().isoformat() for x in cal.sessions_in_range(raw[0]["date"], target)}
-        if sessions != {x["date"] for x in raw}:
+        if sessions - set(confirmed_halts) != {x["date"] for x in raw}:
             raise DataPending("data_gap")
         actions = []
         split_days = set()
@@ -168,7 +171,13 @@ def load_daily_bars(meta, cutoff, previous=None):
         params["start_date"] = previous["raw"][0]["date"]
     prices = provider_get("time_series", {**params, "interval": "1day", "adjust": "none", "outputsize": 5000 if previous else 1500})
     splits = provider_get("splits", {**params, "range": "full"}, cost=20)
-    snapshot = parse_snapshot(meta, prices, splits, target)
+    halt_file = Path(__file__).parents[2] / "config" / "alert_trading_halts.json"
+    try:
+        confirmed = json.loads(halt_file.read_text(encoding="utf-8")).get(meta["symbol"], [])
+        halts = [x["date"] for x in confirmed if x.get("source", "").startswith("https://") and date.fromisoformat(x["date"])]
+    except (OSError, ValueError, TypeError, KeyError):
+        raise DataPending("halt_registry_invalid", False) from None
+    snapshot = parse_snapshot(meta, prices, splits, target, halts)
     if previous and snapshot["raw"][0]["date"] != previous["raw"][0]["date"]:
         raise DataPending("history_anchor_changed", False)
     return snapshot

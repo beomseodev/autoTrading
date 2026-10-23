@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.alert_rules import PARAMS, LABELS, normalize_rule
@@ -33,6 +33,7 @@ class RuleInput(Input):
     type: str
     params: dict[str, Any]
     name: str = Field("", max_length=100)
+    restoreArchived: bool = False
 
     @model_validator(mode="after")
     def validate_params(self):
@@ -84,6 +85,10 @@ def set_settings(payload: SettingsInput, request: Request):
             revision=revision+1, unsubscribe_version=unsubscribe_version+1,
             suppressed=CASE WHEN suppressed='deleted' THEN NULL ELSE suppressed END WHERE id=%s""",
                      (payload.consent, payload.consent, u["id"]))
+        if payload.consent and os.getenv("STOCK_ALERTS_SEND_ENABLED") == "true":
+            from app.auth import is_owner
+            if is_owner(request.session["user"]):
+                conn.execute("UPDATE alert_users SET legacy_consolidated=true WHERE id=%s", (u["id"],))
     return {"revision": payload.revision + 1, "consent": payload.consent}
 
 
@@ -127,6 +132,7 @@ def delete_watch(identity: UUID, request: Request):
         conn.execute("UPDATE alert_watchlist SET archived=true WHERE id=%s", (identity,))
         conn.execute("UPDATE alert_rules SET archived=true,enabled=false,revision=revision+1 WHERE user_id=%s AND instrument_id=%s",
                      (u["id"], row["instrument_id"]))
+        conn.execute("UPDATE alert_events SET canceled=true WHERE user_id=%s AND instrument_id=%s", (u["id"], row["instrument_id"]))
     return {"archived": True}
 
 
@@ -151,6 +157,17 @@ def add_rules(payload: RuleInput, request: Request):
         for instrument in payload.instrumentIds:
             if not conn.execute("SELECT id FROM alert_watchlist WHERE user_id=%s AND instrument_id=%s AND NOT archived", (u["id"], instrument)).fetchone():
                 raise HTTPException(404, "본인 관심종목을 선택해주세요.")
+            existing = conn.execute("SELECT * FROM alert_rules WHERE user_id=%s AND instrument_id=%s AND fingerprint=%s FOR UPDATE",
+                                    (u["id"], instrument, rule_hash(payload.type, payload.params))).fetchone()
+            if existing:
+                if not existing["archived"]:
+                    raise HTTPException(409, "이미 등록된 조건입니다. 기존 규칙을 수정하거나 재개해주세요.")
+                if not payload.restoreArchived:
+                    raise HTTPException(409, "보관된 동일 조건이 있습니다. 보관된 조건 재사용에 체크한 뒤 다시 저장해주세요.")
+                conn.execute("""UPDATE alert_rules SET archived=false,enabled=true,name=%s,revision=revision+1,
+                    meaning_version=meaning_version+1,activated_at=now(),last_session=NULL,last_result=NULL WHERE id=%s""", (payload.name, existing["id"]))
+                identities.append(existing["id"])
+                continue
             identity = uuid4()
             conn.execute("""INSERT INTO alert_rules(id,user_id,instrument_id,kind,params,name,fingerprint)
                 VALUES(%s,%s,%s,%s,%s,%s,%s)""", (identity, u["id"], instrument, payload.type,
@@ -169,7 +186,7 @@ def patch_rule(identity: UUID, payload: RulePatch, request: Request):
         try:
             p = normalize_rule(row["kind"], payload.params) if payload.params is not None else row["params"]
         except ValueError:
-            raise HTTPException(422, "規칙 매개변수를 확인해주세요.") from None
+            raise HTTPException(422, "규칙 매개변수를 확인해주세요.") from None
         enabled = payload.enabled if payload.enabled is not None else row["enabled"]
         if enabled and not row["enabled"]:
             count = conn.execute("SELECT count(*) AS n FROM alert_rules WHERE user_id=%s AND enabled AND NOT archived", (u["id"],)).fetchone()["n"]
@@ -181,6 +198,8 @@ def patch_rule(identity: UUID, payload: RulePatch, request: Request):
             last_session=CASE WHEN %s THEN NULL ELSE last_session END,last_result=CASE WHEN %s THEN NULL ELSE last_result END
             WHERE id=%s AND user_id=%s""", (json_value(p), rule_hash(row["kind"], p), payload.name if payload.name is not None else row["name"],
             enabled, int(semantic), semantic, semantic, semantic, identity, u["id"]))
+        if semantic or not enabled:
+            conn.execute("UPDATE alert_events SET canceled=true WHERE rule_id=%s AND user_id=%s", (identity, u["id"]))
     return {"revision": payload.revision + 1}
 
 
@@ -191,6 +210,7 @@ def delete_rule(identity: UUID, request: Request):
         lock_user(conn, u["id"])
         owned(conn, "alert_rules", identity, u["id"], lock=True)
         conn.execute("UPDATE alert_rules SET archived=true,enabled=false,revision=revision+1 WHERE id=%s AND user_id=%s", (identity, u["id"]))
+        conn.execute("UPDATE alert_events SET canceled=true WHERE rule_id=%s AND user_id=%s", (identity, u["id"]))
     return {"archived": True}
 
 
@@ -201,7 +221,7 @@ def history(table, request, cursor, limit):
         anchor = conn.execute(f"SELECT created_at,id FROM {table} WHERE id=%s AND user_id=%s", (cursor, u["id"])).fetchone() if cursor else None
         if cursor and not anchor:
             raise HTTPException(404, "이력 위치를 찾을 수 없습니다.")
-        rows = conn.execute(f"SELECT * FROM {table} WHERE user_id=%s" +
+        rows = conn.execute(f"SELECT * FROM {table} WHERE user_id=%s AND created_at>=now()-interval '180 days'" +
                             (" AND (created_at,id)<(%s,%s)" if anchor else "") +
                             " ORDER BY created_at DESC,id DESC LIMIT %s",
                             (u["id"], *([anchor["created_at"], anchor["id"]] if anchor else []), limit + 1)).fetchall()
@@ -218,6 +238,7 @@ def digests(request: Request, cursor: UUID | None = None, limit: int = Query(50,
     result = history("alert_digests", request, cursor, limit)
     # Never return unsubscribe credentials embedded in frozen outbound bodies.
     for row in result["items"]:
+        row["deferredCount"] = row["payload"].get("deferred", 0)
         row.pop("payload", None)
     return result
 
@@ -233,3 +254,57 @@ def delete_account(request: Request):
         conn.execute("""UPDATE alert_users SET email='',consent=false,suppressed='deleted',revision=revision+1,
                      unsubscribe_version=unsubscribe_version+1 WHERE id=%s""", (u["id"],))
     return {"deleted": True}
+
+
+@router.get("/api/cron/stock-alerts")
+def stock_alert_cron():
+    from app.services.alert_jobs import process_alert_run
+    return process_alert_run()
+
+
+@router.get("/notifications/unsubscribe/{token}", response_class=HTMLResponse)
+def unsubscribe_page(token: str):
+    from app.services.alert_email import unsubscribe
+    unsubscribe(token)
+    return "<!doctype html><html lang='ko'><meta charset='utf-8'><meta name='viewport' content='width=device-width'><title>종가 알림 해지</title><h1>종가 알림 수신 해지</h1><p>관심종목 알림 전체를 중지합니다. 이미 접수된 메일은 한 통 도착할 수 있습니다.</p><form method='post'><button>전체 알림 해지</button></form></html>"
+
+
+@router.post("/notifications/unsubscribe/{token}", response_class=HTMLResponse)
+def unsubscribe_apply(token: str):
+    from app.services.alert_email import unsubscribe
+    unsubscribe(token, apply=True)
+    return "<!doctype html><html lang='ko'><meta charset='utf-8'><title>해지 완료</title><h1>종가 알림을 해지했습니다.</h1><a href='/alerts'>알림 설정</a></html>"
+
+
+@router.post("/api/webhooks/alert-email")
+async def email_webhook(request: Request):
+    from app.services.alert_email import process_webhook
+    raw = await request.body()
+    if len(raw) > 262144:
+        raise HTTPException(413, "메일 이벤트가 너무 큽니다.")
+    return process_webhook(raw, dict(request.headers))
+
+
+@router.post("/api/alerts/email-test")
+def email_test(request: Request):
+    from datetime import datetime, timedelta, timezone
+    from app.services.alert_email import email_configured, make_payload
+    from app.services.alert_jobs import send_digest
+    if os.getenv("STOCK_ALERTS_SEND_ENABLED") != "true" or not email_configured():
+        raise HTTPException(503, "실제 발송은 꺼져 있습니다. 운영 설정 후 테스트할 수 있습니다.")
+    u = user(request)
+    day = datetime.now(timezone(timedelta(hours=9))).date()
+    identity = uuid4()
+    with database() as conn:
+        current = lock_user(conn, u["id"])
+        if not current["consent"] or current["suppressed"]:
+            raise HTTPException(409, "먼저 본인 이메일 수신에 동의해주세요.")
+        if conn.execute("SELECT id FROM alert_digests WHERE user_id=%s AND digest_date=%s AND kind='test'", (u["id"], day)).fetchone():
+            raise HTTPException(429, "메일 테스트는 하루 한 번만 요청할 수 있습니다.")
+        payload = {"email": current["email"], "unsubscribeVersion": current["unsubscribe_version"], "rules": {}, "eventIds": [],
+                   "envelope": make_payload(current, day, [], test=True)}
+        conn.execute("INSERT INTO alert_digests(id,user_id,digest_date,kind,payload) VALUES(%s,%s,%s,'test',%s)", (identity, u["id"], day, json_value(payload)))
+    send_digest(identity)
+    with database() as conn:
+        result = conn.execute("SELECT status FROM alert_digests WHERE id=%s", (identity,)).fetchone()
+    return result

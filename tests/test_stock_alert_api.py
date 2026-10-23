@@ -51,6 +51,11 @@ def test_settings_watch_rules_isolation_and_revisions(db):
     assert row["meaning_version"] == 2
     assert a.delete("/api/alerts/watchlist/" + item["id"]).status_code == 200
     assert a.get("/api/alerts/rules").json()["items"] == []
+    a.post("/api/alerts/watchlist", json={"symbol": "SCHD"})
+    assert a.post("/api/alerts/rules", json=payload).status_code == 409
+    assert a.post("/api/alerts/rules", json={**payload, "restoreArchived": True}).status_code == 200
+    restored = a.get("/api/alerts/rules").json()["items"][0]
+    assert restored["id"] == identity and restored["meaning_version"] == 3
 
 
 def test_batch_is_atomic_and_email_change_revokes_consent(db):

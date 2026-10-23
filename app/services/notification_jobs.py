@@ -10,6 +10,14 @@ from app.services.portfolio_store import PortfolioStore
 
 
 def run_notification(*, test=False):
+    if not test:
+        from app.services.alert_store import database_ready, legacy_consolidated
+        if database_ready():
+            try:
+                if legacy_consolidated():
+                    return {"outcome": "consolidated", "message": "오전 통합 알림으로 전환되어 별도 메일을 보내지 않습니다."}
+            except HTTPException:
+                return {"outcome": "deferred", "message": "통합 알림 전환 상태를 확인하지 못해 발송을 보류했습니다."}
     store = PortfolioStore()
     now = datetime.now(timezone.utc)
     day = (now + timedelta(hours=9)).date().isoformat()

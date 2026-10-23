@@ -58,3 +58,35 @@ def test_200_day_cross_and_direction():
     assert evaluate_rule("price_ma_cross", {}, data)["triggers"] == ["up"]
     assert evaluate_rule("price_ma_cross", {"direction": "down"}, data)["triggers"] == []
     assert evaluate_rule("price_ma_cross", {}, data + bars([12]))["triggers"] == []
+
+
+@pytest.mark.parametrize("kind,params,prices,expected", [
+    ("price_ma_cross", {"period":2,"average":"ema"}, [1,2,1], ["down"]),
+    ("ma_cross", {"shortPeriod":2,"longPeriod":3}, [2,3,4,.5], ["down"]),
+    ("price_cross", {"price":10}, [10,9], ["down"]),
+    ("daily_change", {"thresholdPct":5}, [100,95], ["down"]),
+    ("rsi_cross", {"period":2,"level":70}, [1,2,3,1], ["down"]),
+    ("rsi_cross", {"period":2,"direction":"up"}, [3,2,1,4], ["up"]),
+    ("range_breakout", {"period":2}, [3,2,1], ["down"]),
+    ("macd_cross", {"fastPeriod":2,"slowPeriod":3,"signalPeriod":2}, [5,4,3,2,10], ["up"]),
+    ("macd_cross", {"fastPeriod":2,"slowPeriod":3,"crossMode":"zero"}, [3,2,1,10], ["up"]),
+    ("bollinger_cross", {"period":2,"stddev":.5,"event":"lower_exit"}, [2,3,1], ["lower_exit"]),
+    ("bollinger_cross", {"period":2,"stddev":.5,"event":"lower_reentry"}, [2,1,3], ["lower_reentry"]),
+    ("bollinger_cross", {"period":2,"stddev":.5,"event":"upper_reentry"}, [1,3,2], ["upper_reentry"]),
+    ("drawdown_cross", {"period":3,"thresholdPct":10}, [100,100,90,89], []),
+])
+def test_other_directions_and_reentry(kind, params, prices, expected):
+    assert evaluate_rule(kind,params,bars(prices))["triggers"] == expected
+
+
+@pytest.mark.parametrize("kind,params", [
+    ("ma_cross",{"shortPeriod":50,"longPeriod":50}),
+    ("macd_cross",{"fastPeriod":26,"slowPeriod":12}),
+    ("price_cross",{"price":float('inf')}),
+    ("price_ma_cross",{"period":2.5}),
+    ("daily_change",{"thresholdPct":0}),
+    ("volume_spike",{"multiple":1}),
+])
+def test_invalid_parameter_combinations(kind,params):
+    with pytest.raises(ValueError):
+        normalize_rule(kind,params)

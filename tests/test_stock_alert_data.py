@@ -39,3 +39,13 @@ def test_us_dst_and_weekend_cutoff():
     assert expected_session(META, datetime(2026, 3, 9, 23, tzinfo=timezone.utc)) == date(2026, 3, 9)
     assert expected_session(META, datetime(2026, 11, 2, 21, tzinfo=timezone.utc)) == date(2026, 10, 30)
     assert expected_session(META, datetime(2026, 10, 25, 23, tzinfo=timezone.utc)) == date(2026, 10, 23)
+
+
+def test_confirmed_halt_does_not_invent_a_bar():
+    prices = payload()
+    prices["values"][0]["datetime"] = "2026-10-20"
+    splits = {"meta": PROVIDER_META, "splits": []}
+    with pytest.raises(DataPending, match="data_gap"):
+        parse_snapshot(META, prices, splits, date(2026, 10, 22))
+    snap = parse_snapshot(META, prices, splits, date(2026, 10, 22), ["2026-10-21"])
+    assert len(snap["raw"]) == 2
