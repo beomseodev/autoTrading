@@ -250,6 +250,17 @@ def test_cloud_save_requires_matching_revision_and_preserves_values(memory_store
     assert client.get('/api/dashboard/state').status_code == 401
 
 
+def test_account_layout_roundtrip_and_invalid_sizes(memory_store):
+    client = TestClient(app)
+    state = SavedDashboard(portfolio=portfolio(emailAlerts=False)).model_dump(mode='json')
+    state['layout'] = {'goal': {'span': 12, 'height': 600, 'order': 4, 'hidden': True}, 'holdings': {'span': 8, 'height': None, 'order': None, 'hidden': False}}
+    assert client.post('/api/dashboard/state', json={'state': state}).status_code == 200
+    assert client.get('/api/dashboard/state').json()['state']['layout'] == state['layout']
+    for layout in ({'unknown': {'span': 4}}, {'goal': {'span': 0}}, {'goal': {'span': 13}}, {'goal': {'span': 4, 'height': 0}}, {'goal': {'span': 4, 'height': 1601}}, {'goal': {'span': 4, 'order': -1}}, {'goal': {'span': 4, 'order': 8}}, {'goal': {'span': 4, 'hidden': 'false'}}):
+        invalid = dict(state, layout=layout)
+        assert client.post('/api/dashboard/state', json={'state': invalid}).status_code == 422
+
+
 def test_cron_secret_only_authorizes_exact_cron_route(monkeypatch):
     monkeypatch.setenv('CRON_SECRET', 'test-cron-secret')
     monkeypatch.setattr('app.dashboard_state.run_notification', lambda: {'outcome': 'checked'})

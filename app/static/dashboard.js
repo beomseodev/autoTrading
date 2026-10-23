@@ -5,6 +5,74 @@ let accountSub = null;
 let ownerAccount = false;
 const COLORS = ["#0b8f76", "#6487d5", "#a68bce", "#e5b364", "#6cabb5", "#bd8696", "#99a7b5"];
 const $ = selector => document.querySelector(selector);
+const PANEL_SPANS = {market: 12, summary: 12, goal: 8, macro: 4, rebalance: 8, holdings: 4, allocation: 8};
+const DEFAULT_HIDDEN_PANELS = new Set();
+let panelLayout = {};
+let layoutReady = false;
+let layoutPending = false;
+let layoutTimer = null;
+function panelKeys() {
+  return Object.keys(PANEL_SPANS).sort((a, b) => (panelLayout[a]?.order ?? Object.keys(PANEL_SPANS).indexOf(a)) - (panelLayout[b]?.order ?? Object.keys(PANEL_SPANS).indexOf(b)));
+}
+function panelSize(key) { return {span: PANEL_SPANS[key], height: null, hidden: DEFAULT_HIDDEN_PANELS.has(key), ...panelLayout[key]}; }
+function updateWidgetList() {
+  const focused = document.activeElement?.dataset.widget;
+  $("#widget-list").innerHTML = panelKeys().map(key => `<label><input type="checkbox" data-widget="${key}"${panelSize(key).hidden ? "" : " checked"}>${esc($(`[data-panel="${key}"]`).dataset.panelLabel)}</label>`).join("");
+  if (focused) $(`[data-widget="${focused}"]`)?.focus();
+}
+function arrangePanels() {
+  for (const key of panelKeys()) $(".overview-grid").appendChild($(`[data-panel="${key}"]`));
+  updateWidgetList();
+}
+function layoutChanged() {
+  layoutPending = true;
+  $("#layout-status").textContent = accountSub ? "배치를 자동 저장하고 있습니다…" : "현재 화면에만 적용됩니다. 새로고침하면 기본 배치로 돌아갑니다.";
+  clearTimeout(layoutTimer);
+  if (!accountSub) { state = {...state, layout: structuredClone(panelLayout)}; layoutPending = false; return; }
+  backupLayoutDraft();
+  if (!cloudSaving) {
+    try { saveState({...state, layout: structuredClone(panelLayout)}); }
+    catch { /* The cloud save below can still succeed when browser storage is blocked. */ }
+  }
+  layoutTimer = setTimeout(savePanelLayout, 400);
+}
+function backupLayoutDraft() {
+  try { localStorage.setItem(STORAGE_KEY + "-layout-draft", JSON.stringify({layout: panelLayout, revision: cloudRevision})); }
+  catch { /* Account saving still works without browser storage. */ }
+}
+async function savePanelLayout() {
+  if (!layoutPending || !accountSub) return;
+  if (cloudLoading || cloudSaving) { layoutTimer = setTimeout(savePanelLayout, 400); return; }
+  layoutPending = false;
+  try {
+    await persistState({...state, layout: structuredClone(panelLayout)});
+    if (layoutPending) backupLayoutDraft();
+    else {
+      try { localStorage.removeItem(STORAGE_KEY + "-layout-draft"); }
+      catch { /* A stale draft is ignored when its cloud revision no longer matches. */ }
+    }
+    if (!layoutPending) $("#layout-status").textContent = cloudReady ? "배치를 계정에 자동 저장했습니다." : "배치를 이 계정의 브라우저에 자동 저장했습니다.";
+    $("#save-layout").hidden = true;
+  } catch (error) {
+    layoutPending = true;
+    $("#layout-status").textContent = `배치 저장 실패: ${error.message} 저장 재시도를 눌러주세요.`;
+    $("#save-layout").hidden = false;
+  }
+}
+function setWidgetVisible(key, visible) {
+  panelLayout[key] = {...panelSize(key), hidden: !visible};
+  paintPanel(key);
+  updateWidgetList();
+  layoutChanged();
+}
+function movePanel(key, target, after = false) {
+  if (key === target) return;
+  const keys = panelKeys().filter(item => item !== key);
+  keys.splice(keys.indexOf(target) + (after ? 1 : 0), 0, key);
+  keys.forEach((item, order) => { panelLayout[item] = {...panelSize(item), order}; });
+  arrangePanels();
+  layoutChanged();
+}
 const emptyState = () => ({version: 1, portfolio: {positions: [], cashKRW: 0, cashUSD: 0, baseCurrency: "KRW"}, goal: null, portfolioSavedAt: null});
 let state = emptyState();
 let invalidStoredValue = null;
@@ -34,6 +102,156 @@ function pct(value) { return value === null || value === undefined ? "—" : `${
 function tone(value) { return value > 0 ? "positive" : value < 0 ? "negative" : ""; }
 function message(text) { $("#app-status").textContent = text; }
 function finiteRange(value, min, max) { return typeof value === "number" && Number.isFinite(value) && value >= min && value <= max; }
+
+function validatePanelLayout(layout = {}) {
+  if (!layout || typeof layout !== "object" || Array.isArray(layout) || Object.entries(layout).some(([key, size]) =>
+    !Object.hasOwn(PANEL_SPANS, key) || !size || !Number.isInteger(size.span) || !finiteRange(size.span, 3, 12) ||
+    (size.height != null && (!Number.isInteger(size.height) || !finiteRange(size.height, 120, 1600))) ||
+    (size.order != null && (!Number.isInteger(size.order) || !finiteRange(size.order, 0, Object.keys(PANEL_SPANS).length - 1))) ||
+    (size.hidden !== undefined && typeof size.hidden !== "boolean"))) throw new Error("화면 크기 설정을 확인해주세요.");
+}
+function paintPanel(key) {
+  const panel = $(`[data-panel="${key}"]`);
+  const size = panelSize(key);
+  panel.style.setProperty("--panel-span", size.span);
+  if (size.height == null) panel.style.removeProperty("--panel-height");
+  else panel.style.setProperty("--panel-height", `${size.height}px`);
+  panel.classList.toggle("panel-sized", size.height != null);
+  panel.hidden = Boolean(size.hidden);
+}
+function applyPanelLayout(layout = {}) {
+  validatePanelLayout(layout);
+  panelLayout = Object.fromEntries(Object.entries(layout).map(([key, size]) => [key, {...size}]));
+  Object.keys(PANEL_SPANS).forEach(paintPanel);
+  arrangePanels();
+}
+function resizePanel(key, span, height) {
+  panelLayout[key] = {...panelSize(key), span: Math.max(3, Math.min(12, Math.round(span))), height: Math.max(120, Math.min(1600, Math.round(height)))};
+  paintPanel(key);
+  const size = panelLayout[key];
+  const width = matchMedia("(max-width: 900px)").matches ? 100 : Math.round(size.span / 12 * 100);
+  $("#layout-status").textContent = `${$(`[data-panel="${key}"]`).dataset.panelLabel} · 너비 ${width}% · 높이 ${size.height}px`;
+}
+function setupDashboardLayout() {
+  applyPanelLayout(state.layout ?? {});
+  layoutReady = true;
+  $("#save-layout").hidden = true;
+  if (accountSub) {
+    try {
+      const draft = JSON.parse(localStorage.getItem(STORAGE_KEY + "-layout-draft") || "null");
+      if (draft && (!cloudReady || draft.revision === cloudRevision)) {
+        applyPanelLayout(draft.layout);
+        layoutChanged();
+      }
+    } catch { /* Invalid drafts must not replace the saved account layout. */ }
+  }
+  $("#reset-layout").disabled = false;
+  for (const key of Object.keys(PANEL_SPANS)) {
+    const panel = $(`[data-panel="${key}"]`);
+    const handle = document.createElement("button");
+    handle.type = "button";
+    handle.className = "panel-resize";
+    const label = panel.dataset.panelLabel;
+    handle.textContent = "↘";
+    handle.setAttribute("aria-label", `${label} 크기 조절. 드래그하거나 방향키를 사용하세요.`);
+    handle.title = "드래그 또는 방향키로 크기 조절";
+    let drag = null;
+    handle.addEventListener("pointerdown", event => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      handle.focus();
+      const rect = panel.getBoundingClientRect();
+      drag = {x: event.clientX, y: event.clientY, width: rect.width, height: rect.height,
+              size: panelLayout[key] ? {...panelLayout[key]} : null};
+      handle.setPointerCapture(event.pointerId);
+    });
+    handle.addEventListener("pointermove", event => {
+      if (!drag) return;
+      const grid = $(".overview-grid");
+      const gap = parseFloat(getComputedStyle(grid).columnGap) || 0;
+      const unit = (grid.clientWidth + gap) / 12;
+      const span = matchMedia("(max-width: 900px)").matches ? (panelLayout[key]?.span ?? PANEL_SPANS[key]) : (drag.width + event.clientX - drag.x + gap) / unit;
+      resizePanel(key, span, drag.height + event.clientY - drag.y);
+    });
+    handle.addEventListener("pointerup", () => { if (drag) layoutChanged(); drag = null; });
+    handle.addEventListener("pointercancel", () => {
+      if (drag) {
+        if (drag.size) panelLayout[key] = drag.size;
+        else delete panelLayout[key];
+        paintPanel(key);
+      }
+      drag = null;
+      $("#layout-status").textContent = "크기 조절을 취소했습니다.";
+    });
+    handle.addEventListener("lostpointercapture", () => { drag = null; });
+    handle.addEventListener("keydown", event => {
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+      event.preventDefault();
+      const size = panelLayout[key] ?? {span: PANEL_SPANS[key], height: panel.getBoundingClientRect().height};
+      const horizontal = !matchMedia("(max-width: 900px)").matches;
+      const span = size.span + (horizontal ? (event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0) : 0);
+      resizePanel(key, span, (size.height ?? panel.getBoundingClientRect().height) + (event.key === "ArrowDown" ? 20 : event.key === "ArrowUp" ? -20 : 0));
+      layoutChanged();
+    });
+    panel.appendChild(handle);
+    const controls = document.createElement("div");
+    controls.className = "panel-controls";
+    const move = document.createElement("button");
+    move.type = "button";
+    move.className = "panel-move";
+    move.textContent = "↕";
+    move.setAttribute("aria-label", `${label} 이동. 드래그하거나 위아래 방향키를 사용하세요.`);
+    let moving = false, drop = null;
+    const clearDrop = () => { if (drop) $(`[data-panel="${drop.key}"]`).classList.remove("panel-drop-target"); drop = null; };
+    move.addEventListener("pointerdown", event => {
+      if (event.button !== 0) return;
+      event.preventDefault(); move.focus(); moving = true;
+      move.setPointerCapture(event.pointerId);
+    });
+    move.addEventListener("pointermove", event => {
+      if (!moving) return;
+      clearDrop();
+      const target = document.elementFromPoint(event.clientX, event.clientY)?.closest("[data-panel]");
+      if (!target || target === panel) return;
+      const rect = target.getBoundingClientRect(), own = panel.getBoundingClientRect();
+      const after = Math.abs(own.top - rect.top) < 20 ? event.clientX > rect.left + rect.width / 2 : event.clientY > rect.top + rect.height / 2;
+      drop = {key: target.dataset.panel, after};
+      target.classList.add("panel-drop-target");
+    });
+    move.addEventListener("pointerup", () => {
+      const target = drop; moving = false; clearDrop();
+      if (target) { movePanel(key, target.key, target.after); move.focus(); }
+    });
+    for (const type of ["pointercancel", "lostpointercapture"]) move.addEventListener(type, () => { moving = false; clearDrop(); });
+    move.addEventListener("keydown", event => {
+      if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
+      event.preventDefault();
+      const keys = panelKeys().filter(item => !panelSize(item).hidden), index = keys.indexOf(key);
+      const target = keys[index + (event.key === "ArrowDown" ? 1 : -1)];
+      if (target) { movePanel(key, target, event.key === "ArrowDown"); move.focus(); }
+    });
+    controls.appendChild(move);
+    const remove = document.createElement("button");
+    remove.type = "button"; remove.textContent = "×";
+    remove.setAttribute("aria-label", `${label} 위젯 숨기기`);
+    remove.addEventListener("click", () => { setWidgetVisible(key, false); $("#widget-list-button").focus(); });
+    controls.appendChild(remove);
+    panel.appendChild(controls);
+  }
+}
+$("#reset-layout").addEventListener("click", () => {
+  if (cloudLoading) return;
+  applyPanelLayout();
+  layoutChanged();
+});
+$("#save-layout").addEventListener("click", savePanelLayout);
+$("#widget-list-button").addEventListener("click", () => {
+  $("#widget-list").hidden = !$("#widget-list").hidden;
+  $("#widget-list-button").setAttribute("aria-expanded", String(!$("#widget-list").hidden));
+});
+$("#widget-list").addEventListener("change", event => {
+  if (event.target.dataset.widget) setWidgetVisible(event.target.dataset.widget, event.target.checked);
+});
 
 function validatePortfolio(value) {
   if (!value || !["KRW", "USD"].includes(value.baseCurrency) || !Array.isArray(value.positions) || value.positions.length > 30 ||
@@ -82,6 +300,7 @@ function restoreState() {
     const value = JSON.parse(raw);
     if (value.version !== 1) throw new Error("저장 버전을 확인할 수 없습니다.");
     validatePortfolio(value.portfolio);
+    validatePanelLayout(value.layout);
     if (value.goal !== null) validateGoal(value.goal);
     if (value.portfolioSavedAt !== null && (typeof value.portfolioSavedAt !== "string" || Number.isNaN(Date.parse(value.portfolioSavedAt)))) throw new Error("저장 날짜가 올바르지 않습니다.");
     state = value;
@@ -110,6 +329,7 @@ function renderEmailStatus(status = null) {
 }
 async function persistState(next) {
   if (cloudLoading || cloudSaving) throw new Error("저장 정보를 처리하고 있습니다. 잠시 후 다시 시도해주세요.");
+  if (layoutReady) next = {...next, layout: structuredClone(panelLayout)};
   if (!accountSub) {
     state = next;
     renderEmailStatus();
@@ -140,6 +360,7 @@ async function loadCloudState() {
     cloudRevision = result.revision;
     if (result.state) {
       validatePortfolio(result.state.portfolio);
+      validatePanelLayout(result.state.layout);
       if (result.state.goal !== null) validateGoal(result.state.goal);
       try {
         const previous = localStorage.getItem(STORAGE_KEY);
@@ -171,7 +392,7 @@ $("#test-email-btn").addEventListener("click", async () => {
 function updateRefreshButton() { $("#refresh-btn").disabled = portfolioBusy || marketBusy; }
 
 function renderMarket(data) {
-  $("#market-strip").innerHTML = data.markets.map(item => `<article class="market-item"><span>${esc(item.label)}</span><strong>${item.available ? number(item.value) : "—"}</strong><small class="${item.available ? tone(item.changePct) : "muted"}">${item.available ? pct(item.changePct) : "조회 불가"}</small><a class="market-meta" href="${esc(item.source)}" target="_blank" rel="noopener noreferrer">${item.available ? `${esc(item.asOf)} · Yahoo Finance ↗` : "출처 확인 ↗"}</a></article>`).join("");
+  $("#market-strip").innerHTML = data.markets.map(item => `<article class="market-item"><span>${esc(item.label)}</span><strong>${item.available ? number(item.value) : "—"}</strong><small class="${item.available ? tone(item.changePct) : "muted"}">${item.available ? pct(item.changePct) : "조회 불가"}</small><a class="market-meta" href="${esc(item.source)}" target="_blank" rel="noopener noreferrer">${item.available ? `가격 기준일 ${esc(item.asOf)} · Yahoo Finance ↗` : "출처 확인 ↗"}</a></article>`).join("");
   $("#macro-list").innerHTML = data.macro.map(item => `<article class="macro-item"><div class="macro-top"><a href="${esc(item.source)}" title="${esc(item.description)}" target="_blank" rel="noopener noreferrer">${esc(item.label)} ↗</a><strong>${item.available ? `${number(item.value)}%` : "—"}</strong></div><div class="macro-bottom"><span>${item.available ? `관측 ${esc(item.asOf)}` : "데이터 조회 불가"}</span><span>${item.available ? `${item.change > 0 ? "+" : ""}${number(item.change)}%p` : "잠시 후 새로고침"}</span></div><p class="macro-meaning">${esc(item.description)}</p></article>`).join("");
 }
 async function loadMarkets() {
@@ -259,6 +480,8 @@ function renderPortfolio(data) {
   } else {
     $("#holdings-body").innerHTML = `<tr><td colspan="6" class="empty-table"><strong>${registered ? "등록한 주식이 없습니다." : "아직 등록한 자산이 없습니다."}</strong><p>종목·보유 수량·평균 매입가를 입력하면 실제 보유 현황이 표시됩니다.</p><button class="button primary" data-edit-portfolio type="button">보유 자산 등록</button></td></tr>`;
   }
+  const priceDates = [...new Set(data.holdings.filter(item => item.available).map(item => item.asOf))];
+  $("#holdings-compact").innerHTML = `<strong>${registered && data.complete ? money(data.totalValue) : "—"}</strong><span>${data.holdings.length}개 종목 · ${data.complete ? "현금 포함 총자산" : "시세 미확인 · 합계 계산 보류"}</span><small class="compact-profit">평가손익 ${data.complete ? money(data.unrealizedProfit) : "—"}</small><small>가격 기준일 ${esc(priceDates.join(" · ") || "미확인")}</small>`;
   const fxNote = data.fx ? `환율 ${number(data.fx.value)}원/USD (가격 기준일 ${data.fx.asOf})` : "환율 조회 불가";
   $("#valuation-note").textContent = `Yahoo 최근 일봉 · 가격 기준일은 거래소 현지 날짜이며 실시간 체결 시각은 제공하지 않습니다. 화면 조회 ${new Date(data.fetchedAt).toLocaleString("ko-KR", {timeZone: "Asia/Seoul", hour12: false})} (한국시간) · ${fxNote}. 종목별 평가손익을 표시 통화로 환산하며 취득 환율에 따른 환차손익·실현손익·배당 누계는 제외합니다.`;
   $("#updated-at").textContent = `화면 조회 ${new Date(data.fetchedAt).toLocaleTimeString("ko-KR", {timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit"})} (한국시간)`;
@@ -277,6 +500,7 @@ async function loadPortfolio() {
   $("#rebalance-body").textContent = "";
   $("#asset-summary").setAttribute("aria-busy", "true");
   $("#updated-at").textContent = "보유 자산 평가 중";
+  $("#holdings-compact").textContent = "최신 시세로 평가 중입니다.";
   showGoalPending("보유 자산을 평가한 뒤 목표 경로를 계산합니다.");
   updateRefreshButton();
   try {
@@ -289,6 +513,7 @@ async function loadPortfolio() {
     if (sequence === portfolioSequence) {
       ["#total-assets", "#unrealized-profit", "#daily-change", "#cash-value"].forEach(selector => { $(selector).textContent = "—"; });
       $("#total-caption").textContent = "시세 조회 실패 · 새로고침해주세요";
+      $("#holdings-compact").textContent = "시세 조회 실패 · 새로고침해주세요";
       message(error.message || "자산 평가에 실패했습니다.");
       showGoalPending("자산 평가를 완료한 뒤 계산할 수 있습니다.");
       $("#rebalance-status").textContent = "자산 평가에 실패해 리밸런싱 점검을 보류했습니다.";
@@ -334,20 +559,21 @@ function renderProjection(data, initial) {
   $("#goal-progress span").style.width = `${progress}%`;
   $("#progress-labels").innerHTML = `<span>현재 ${money(initial, goal.currency)}</span><span>${number(progress, 1)}% 달성</span>`;
   $("#goal-scenarios").innerHTML = data.scenarios.map((scenario, index) => `<div class="scenario-result ${index === 1 ? "base" : ""}"><span>${esc(scenario.label)} · 연 ${number(scenario.annualReturnPct)}%</span><b>${goalDate(scenario)}</b></div>`).join("");
-  const width = Math.max(260, Math.round($("#projection-chart").clientWidth)), height = 160, left = 54, right = 12, top = 16, bottom = 28;
-  const max = Math.max(goal.targetAmount, ...data.scenarios.flatMap(scenario => scenario.points.map(point => point.value)), 1);
+  const width = Math.max(260, Math.round($("#projection-chart").clientWidth)), height = Math.max(120, Math.round($("#projection-chart").clientHeight) || 160), left = 54, right = 12, top = 16, bottom = 28;
+  const max = Math.max(goal.targetAmount, initial, ...data.scenarios.flatMap(scenario => scenario.points.map(point => point.value)), 1);
   const firstDate = Date.parse(data.scenarios[0].points[0].date);
   const lastDate = Date.parse(data.scenarios[0].points.at(-1).date);
   const x = point => left + (Date.parse(point.date) - firstDate) / Math.max(1, lastDate - firstDate) * (width - left - right);
   const y = value => top + (1 - value / max) * (height - top - bottom);
   const lineColors = ["#9eb0be", "#0b8f76", "#81a4d7"];
-  const grid = Array.from({length: 4}, (_, index) => {
-    const value = max * index / 3;
+  const ticks = height >= 280 ? 6 : 4;
+  const grid = Array.from({length: ticks}, (_, index) => {
+    const value = max * index / (ticks - 1);
     return `<line x1="${left}" y1="${y(value)}" x2="${width-right}" y2="${y(value)}" stroke="#edf1f4"/><text x="${left-7}" y="${y(value)+3}" text-anchor="end" fill="#9aa6af" font-size="9">${new Intl.NumberFormat("ko-KR", {notation: "compact", maximumFractionDigits: 1}).format(value)}</text>`;
   }).join("");
-  const lines = data.scenarios.map((scenario, index) => `<polyline points="${scenario.points.map(point => `${x(point)},${y(point.value)}`).join(" ")}" fill="none" stroke="${lineColors[index]}" stroke-width="${index === 1 ? 2.5 : 1.5}" ${index === 1 ? "" : 'stroke-dasharray="4 4"'}/>`).join("");
+  const lines = data.scenarios.map((scenario, index) => `<polyline class="${index === 1 ? "projection-base" : "projection-detail"}" points="${scenario.points.map(point => `${x(point)},${y(point.value)}`).join(" ")}" fill="none" stroke="${lineColors[index]}" stroke-width="${index === 1 ? 2.5 : 1.5}" ${index === 1 ? "" : 'stroke-dasharray="4 4"'}/>`).join("");
   $("#projection-chart").classList.remove("empty-chart");
-  $("#projection-chart").innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="목표 자산 전망. 낮은 가정 ${goalDate(data.scenarios[0])}, 입력 가정 ${goalDate(base)}, 높은 가정 ${goalDate(data.scenarios[2])}. 세로축 ${goal.currency}, 가로축 경과 기간.">${grid}<line x1="${left}" y1="${y(goal.targetAmount)}" x2="${width-right}" y2="${y(goal.targetAmount)}" stroke="#d4b477" stroke-dasharray="3 4"/>${lines}<text x="${left}" y="${height-6}" fill="#9aa6af" font-size="9">현재</text><text x="${width-right}" y="${height-6}" text-anchor="end" fill="#9aa6af" font-size="9">${esc(data.scenarios[0].points.at(-1).date.slice(0,7))} · ${goal.currency}</text></svg>`;
+  $("#projection-chart").innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="목표 자산 전망. ${width <= 440 ? `입력 가정 ${goalDate(base)}만 표시` : `낮은 가정 ${goalDate(data.scenarios[0])}, 입력 가정 ${goalDate(base)}, 높은 가정 ${goalDate(data.scenarios[2])}`}. 세로축 ${goal.currency}, 가로축 경과 기간.">${grid}<line x1="${left}" y1="${y(goal.targetAmount)}" x2="${width-right}" y2="${y(goal.targetAmount)}" stroke="#d4b477" stroke-dasharray="3 4"/>${lines}<text x="${left}" y="${height-6}" fill="#9aa6af" font-size="9">현재</text><text x="${width-right}" y="${height-6}" text-anchor="end" fill="#9aa6af" font-size="9">${esc(data.scenarios[0].points.at(-1).date.slice(0,7))} · ${goal.currency}</text></svg>`;
 }
 async function loadGoal() {
   const sequence = ++goalSequence;
@@ -527,6 +753,7 @@ async function initializeAccount() {
       $("#cloud-status").textContent = "로그인 없이 이용할 수 있습니다. 입력은 저장되지 않으며 새로고침·로그인 시 초기화됩니다. 저장하려면 Google로 로그인해주세요.";
       $("#portfolio-form button[type=submit]").textContent = "적용하고 현황 보기";
       $("#goal-form button[type=submit]").textContent = "목표 적용·계산";
+      setupDashboardLayout();
       renderEmailStatus();
       loadMarkets();
       loadPortfolio();
@@ -547,6 +774,7 @@ async function initializeAccount() {
     restoreState();
     loadMarkets();
     await loadCloudState();
+    setupDashboardLayout();
     loadPortfolio();
   } catch { message("로그인 상태를 확인하지 못했습니다. 새로고침해주세요."); }
 }
@@ -560,9 +788,13 @@ document.addEventListener("visibilitychange", async () => {
   } catch { /* API authorization still protects account data. */ }
 });
 let observedProjectionWidth = 0;
+let observedProjectionHeight = 0;
 new ResizeObserver(([entry]) => {
   const width = Math.round(entry.contentRect.width);
-  if (width === observedProjectionWidth) return;
+  const height = Math.round(entry.contentRect.height);
+  if (!width || !height) { observedProjectionWidth = observedProjectionHeight = 0; return; }
+  if (width === observedProjectionWidth && height === observedProjectionHeight) return;
   observedProjectionWidth = width;
+  observedProjectionHeight = height;
   if (projectionView) renderProjection(projectionView.data, projectionView.initial);
 }).observe($("#projection-chart"));

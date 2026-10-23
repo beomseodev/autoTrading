@@ -35,6 +35,7 @@ test('guest uses memory only, never reads or writes account backups or cloud sta
     localStorage = {getItem() { storageAccesses++; throw new Error('Guest read storage'); }, setItem() { storageAccesses++; throw new Error('Guest wrote storage'); }};
     loadCloudState = async () => { throw new Error('Guest read cloud state'); };`, guest.context);
   await guest.run('initializeAccount()');
+  guest.run('setWidgetVisible("goal",false); movePanel("holdings","market")');
   assert.equal(guest.run('cloudLoading'), false);
   assert.equal(guest.run('state.portfolio.cashUSD'), 0);
   assert.equal(guest.run('STORAGE_KEY'), null);

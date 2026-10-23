@@ -97,11 +97,19 @@ class SavedGoal(BaseModel):
     annualReturnPct: float = Field(ge=-50, le=50)
 
 
+class PanelSize(BaseModel):
+    span: int = Field(ge=3, le=12)
+    height: int | None = Field(default=None, ge=120, le=1600)
+    order: int | None = Field(default=None, ge=0, le=7, strict=True)
+    hidden: bool = Field(default=False, strict=True)
+
+
 class SavedDashboard(BaseModel):
     version: Literal[1] = 1
     portfolio: PortfolioSnapshotRequest
     goal: SavedGoal | None = None
     portfolioSavedAt: str | None = Field(default=None, max_length=40)
+    layout: dict[Literal["market", "summary", "goal", "macro", "rebalance", "holdings", "allocation", "performance"], PanelSize] = Field(default_factory=dict)
 
 
 class SaveDashboardRequest(BaseModel):
