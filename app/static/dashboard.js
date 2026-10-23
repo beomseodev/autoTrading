@@ -193,14 +193,29 @@ function renderAllocation(data) {
     $("#allocation-legend").innerHTML = `<p class="empty-note">${data.complete ? "종목과 현금을 등록해 자산 구성을 확인하세요." : "일부 시세가 누락되어 비중을 계산하지 않았습니다."}</p>`;
     return;
   }
-  const items = data.holdings.map(item => ({label: item.ticker, value: item.value}));
+  const items = data.holdings.map(item => ({label: item.name || item.ticker, value: item.value}));
   if (data.cashValue > 0) items.push({label: "현금", value: data.cashValue});
   items.sort((a, b) => b.value - a.value);
   let offset = 0;
-  const stops = items.map((item, index) => { const start = offset; offset += item.value / data.totalValue * 100; return `${COLORS[index % COLORS.length]} ${start}% ${offset}%`; });
-  $("#allocation-visual").innerHTML = `<div class="allocation-donut" aria-hidden="true" style="background:conic-gradient(${stops.join(",")})"><div class="donut-hole">보유 자산<b>${items.length}</b></div></div>`;
+  const segments = items.map((item, index) => {
+    const percent = item.value / data.totalValue * 100;
+    const start = offset;
+    offset += percent;
+    const label = `${item.label} · ${number(percent)}%`;
+    return `<circle class="allocation-segment" cx="90" cy="90" r="75" pathLength="100" fill="none" stroke="${COLORS[index % COLORS.length]}" stroke-width="30" stroke-dasharray="${percent} ${100-percent}" stroke-dashoffset="${-start}" transform="rotate(-90 90 90)" tabindex="0" role="img" aria-label="${esc(label)}" aria-describedby="allocation-tooltip" data-allocation-label="${esc(label)}"/>`;
+  }).join("");
+  $("#allocation-visual").innerHTML = `<div class="allocation-donut"><svg viewBox="0 0 180 180" aria-label="종목별 자산 비중">${segments}</svg><div class="donut-hole">보유 자산<b>${items.length}</b></div><div id="allocation-tooltip" class="allocation-tooltip" role="tooltip" hidden></div></div>`;
   $("#allocation-legend").innerHTML = items.map((item, index) => `<div class="allocation-line"><i style="background:${COLORS[index % COLORS.length]}"></i><span>${esc(item.label)}</span><b>${number(item.value / data.totalValue * 100)}%</b></div>`).join("");
 }
+for (const type of ["pointerover", "focusin"]) $("#allocation-visual").addEventListener(type, event => {
+  const segment = event.target.closest("[data-allocation-label]");
+  const tooltip = $("#allocation-tooltip");
+  if (segment && tooltip) { tooltip.textContent = segment.dataset.allocationLabel; tooltip.hidden = false; }
+});
+for (const type of ["pointerout", "focusout"]) $("#allocation-visual").addEventListener(type, () => {
+  const tooltip = $("#allocation-tooltip");
+  if (tooltip) tooltip.hidden = true;
+});
 function renderPortfolio(data) {
   const registered = data.hasAssets || Boolean(state.portfolioSavedAt);
   $("#total-assets").textContent = registered && data.complete ? money(data.totalValue) : "—";
@@ -214,17 +229,17 @@ function renderPortfolio(data) {
   $("#holding-count").textContent = `${data.holdings.length}개 종목`;
   $("#holdings-description").textContent = state.portfolioSavedAt ? `직접 입력 · 수정 ${new Date(state.portfolioSavedAt).toLocaleDateString("ko-KR")} · 가격·매입가 현지 통화` : "한국·미국 주식 · ETF / 직접 입력 / 가격·매입가 현지 통화";
   if (data.holdings.length) {
-    $("#holdings-body").innerHTML = data.holdings.map(item => `<tr><td><strong>${esc(item.ticker)}</strong><small>${item.available ? esc(item.asOf) : "시세 미확인"}</small></td><td class="number">${number(item.quantity, 6)}</td><td class="number">${item.available ? money(item.price, item.currency) : "—"}<small>평균 ${money(item.averageCost, item.currency)}</small></td><td class="number">${money(item.value)}</td><td class="number ${item.available ? tone(item.profitPct) : "muted"}">${item.available ? pct(item.profitPct) : "조회 불가"}</td><td class="number">${item.weightPct === null ? "—" : `${number(item.weightPct)}%`}</td></tr>`).join("");
+    $("#holdings-body").innerHTML = data.holdings.map(item => `<tr><td><strong>${esc(item.name || item.ticker)}</strong><small>${esc(item.ticker)} · ${item.available ? esc(item.currency) : "시세 미확인"}</small></td><td class="number" data-label="수량">${number(item.quantity, 6)}</td><td class="number" data-label="최근 가격">${item.available ? money(item.price, item.currency) : "—"}${item.available ? `<small>가격 기준일 ${esc(item.asOf)}</small>` : ""}<small class="price-cost-detail">평균 ${money(item.averageCost, item.currency)}</small></td><td class="number" data-label="평가금액">${money(item.value)}</td><td class="number ${item.available ? tone(item.profitPct) : "muted"}" data-label="평가손익률">${item.available ? pct(item.profitPct) : "조회 불가"}</td><td class="number">${item.weightPct === null ? "—" : `${number(item.weightPct)}%`}</td></tr>`).join("");
   } else {
     $("#holdings-body").innerHTML = `<tr><td colspan="6" class="empty-table"><strong>${registered ? "등록한 주식이 없습니다." : "아직 등록한 자산이 없습니다."}</strong><p>종목·보유 수량·평균 매입가를 입력하면 실제 보유 현황이 표시됩니다.</p><button class="button primary" data-edit-portfolio type="button">보유 자산 등록</button></td></tr>`;
   }
-  const fxNote = data.fx ? `환율 ${number(data.fx.value)}원/USD (${data.fx.asOf})` : "환율 조회 불가";
-  $("#valuation-note").textContent = `Yahoo 최근 일봉 · ${fxNote}. 종목별 평가손익을 표시 통화로 환산하며 취득 환율에 따른 환차손익·실현손익·배당 누계는 제외합니다.`;
-  $("#updated-at").textContent = `조회 ${new Date(data.fetchedAt).toLocaleTimeString("ko-KR", {hour: "2-digit", minute: "2-digit"})}`;
+  const fxNote = data.fx ? `환율 ${number(data.fx.value)}원/USD (가격 기준일 ${data.fx.asOf})` : "환율 조회 불가";
+  $("#valuation-note").textContent = `Yahoo 최근 일봉 · 가격 기준일은 거래소 현지 날짜이며 실시간 체결 시각은 제공하지 않습니다. 화면 조회 ${new Date(data.fetchedAt).toLocaleString("ko-KR", {timeZone: "Asia/Seoul", hour12: false})} (한국시간) · ${fxNote}. 종목별 평가손익을 표시 통화로 환산하며 취득 환율에 따른 환차손익·실현손익·배당 누계는 제외합니다.`;
+  $("#updated-at").textContent = `화면 조회 ${new Date(data.fetchedAt).toLocaleTimeString("ko-KR", {timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit"})} (한국시간)`;
   renderAllocation(data);
   const check = data.rebalance;
   $("#rebalance-status").textContent = check ? `${check.message}${check.asOf ? ` 시세 기준 ${check.asOf} · 허용폭 ±${number(check.thresholdPct)}%p` : ""}` : "목표 비중을 입력해주세요.";
-  $("#rebalance-body").innerHTML = (check?.items ?? []).map(item => `<tr><td>${esc(item.ticker)}${item.needsRebalance ? " · 점검 필요" : ""}</td><td class="number">${number(item.weightPct)}%</td><td class="number">${number(item.targetWeightPct)}%</td><td class="number">${pct(item.driftPct).replace("%", "%p")}</td><td class="number">${money(item.adjustmentValue)}</td></tr>`).join("");
+  $("#rebalance-body").innerHTML = (check?.items ?? []).map(item => `<tr><td><strong>${esc(item.name || item.ticker)}</strong>${item.name && item.name !== item.ticker ? `<small>${esc(item.ticker)}</small>` : ""}${item.needsRebalance ? " · 점검 필요" : ""}</td><td class="number" data-label="현재 비중">${number(item.weightPct)}%</td><td class="number" data-label="목표 비중">${number(item.targetWeightPct)}%</td><td class="number" data-label="차이 (%p)">${pct(item.driftPct).replace("%", "%p")}</td><td class="number">${money(item.adjustmentValue)}</td></tr>`).join("");
 }
 async function loadPortfolio() {
   const sequence = ++portfolioSequence;
@@ -357,6 +372,7 @@ async function searchSymbols() {
         }
         const row = empty || addOwnedRow({ticker: item.ticker});
         row.querySelector('[name=ticker]').value = item.ticker;
+        row.querySelector(".owned-name").textContent = item.name;
         row.querySelector('[name=quantity]').focus();
         clearSymbolSearch();
         $("#symbol-search-status").textContent = `${item.name} 선택됨 · 평균 매입가는 ${item.currency === "KRW" ? "원화" : "달러"}로 입력하세요.`;
@@ -378,6 +394,8 @@ function addOwnedRow(position = {}) {
   const fragment = $("#owned-position-template").content.cloneNode(true);
   const row = fragment.querySelector(".owned-row");
   for (const name of ["ticker", "quantity", "averageCost", "targetWeight"]) row.querySelector(`[name=${name}]`).value = position[name] ?? "";
+  row.querySelector(".owned-name").textContent = snapshot?.holdings.find(item => item.ticker === position.ticker)?.name ?? "";
+  row.querySelector('[name=ticker]').addEventListener("input", () => { row.querySelector(".owned-name").textContent = ""; });
   row.querySelector(".remove-owned").addEventListener("click", () => { row.remove(); $("#add-owned-position").disabled = false; });
   $("#owned-positions").appendChild(fragment);
   $("#add-owned-position").disabled = $("#owned-positions").children.length >= 30;

@@ -5,6 +5,14 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
+def stock_name(symbol: str, bucket: int) -> str:
+    query = symbol[:-3] if symbol.endswith((".KS", ".KQ")) else symbol
+    try:
+        return next((item["name"] for item in search_symbols(query, bucket) if item["ticker"] == symbol), symbol)
+    except Exception:
+        return symbol
+
+
 @lru_cache(maxsize=128)
 def search_symbols(query: str, bucket: int) -> list[dict]:
     request = Request(

@@ -29,11 +29,12 @@ def evaluate_rebalance(request: PortfolioSnapshotRequest, snapshot: dict, today:
     targets = {p.ticker: p.targetWeight for p in request.positions}
     values = [(item["ticker"], item["value"], targets[item["ticker"]]) for item in snapshot["holdings"]]
     values.append(("현금", snapshot["cashValue"], max(0, 100 - sum(targets.values()))))
+    names = {item["ticker"]: item.get("name") or item["ticker"] for item in snapshot["holdings"]}
     rows = []
     for ticker, value, target in values:
         weight = value / total * 100
         drift = weight - target
-        rows.append({"ticker": ticker, "weightPct": weight, "targetWeightPct": target,
+        rows.append({"ticker": ticker, "name": names.get(ticker, ticker), "weightPct": weight, "targetWeightPct": target,
                      "driftPct": drift, "adjustmentValue": total * target / 100 - value,
                      "needsRebalance": abs(drift) > request.rebalanceTolerancePct + 1e-9})
     needed = any(row["needsRebalance"] for row in rows)

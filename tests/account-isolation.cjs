@@ -1,33 +1,31 @@
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
 const {test} = require('node:test');
+const {browser, saved} = require('./helpers/dashboard.cjs');
+const vm = require('node:vm');
 
-function browser(user, stored = new Map(), isOwner = false) {
-  const nodes = new Map();
-  const node = selector => {
-    if (!nodes.has(selector)) nodes.set(selector, {textContent: '', addEventListener() {}});
-    return nodes.get(selector);
+test('prices show each market date separately from the Korean screen query time', () => {
+  const page = browser(null);
+  page.context.viewData = {
+    hasAssets: true, complete: false, baseCurrency: 'KRW', totalValue: null,
+    dayChange: null, fetchedAt: '2026-10-22T23:30:00Z',
+    fx: {value: 1400, asOf: '2026-10-22'},
+    holdings: [
+      {ticker: '005930.KS', available: true, currency: 'KRW', price: 70000, averageCost: 60000, quantity: 1, asOf: '2026-10-22', value: 70000, weightPct: null},
+      {ticker: 'AAPL', available: true, currency: 'USD', price: 200, averageCost: 150, quantity: 1, asOf: '2026-10-21', value: 280000, weightPct: null},
+      {ticker: 'FAIL', available: false, currency: 'USD', averageCost: 100, quantity: 1, asOf: 'not-a-quote-date', value: null, weightPct: null},
+    ],
   };
-  const requests = [];
-  const context = vm.createContext({
-    console, Intl, Date, Number, Map, Set, JSON,
-    document: {querySelector: node, addEventListener() {}},
-    localStorage: {getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value)},
-    fetch: async (path, options) => {
-      requests.push({path, options});
-      return {ok: true, status: 200, json: async () => ({user, isOwner})};
-    },
-    location: {replace() {}, reload() {}},
-    ResizeObserver: class {observe() {}},
-  });
-  const script = fs.readFileSync('app/static/dashboard.js', 'utf8').replace('\ninitializeAccount();', '\n');
-  vm.runInContext(script, context);
-  vm.runInContext('loadMarkets = () => {}; loadCloudState = async () => {}; loadPortfolio = () => {};', context);
-  return {context, stored, requests, run: code => vm.runInContext(code, context)};
-}
-
-const saved = cashUSD => JSON.stringify({version: 1, portfolio: {positions: [], cashKRW: 0, cashUSD, baseCurrency: 'USD'}, goal: null, portfolioSavedAt: null});
+  page.run('setMetric = () => {}; renderAllocation = () => {}; renderPortfolio(viewData)');
+  const rows = page.run('$("#holdings-body").innerHTML').split('</tr>');
+  assert.match(rows[0], /가격 기준일 2026-10-22/);
+  assert.match(rows[1], /가격 기준일 2026-10-21/);
+  assert.doesNotMatch(rows[2], /가격 기준일|not-a-quote-date/);
+  const note = page.run('$("#valuation-note").textContent');
+  assert.match(note, /거래소 현지 날짜/);
+  assert.match(note, /환율.*가격 기준일 2026-10-22/);
+  assert.match(note, /화면 조회 2026\. 10\. 23\./);
+  assert.match(page.run('$("#updated-at").textContent'), /화면 조회.*08:30.*한국시간/);
+});
 
 test('guest uses memory only, never reads or writes account backups or cloud state', async () => {
   const store = new Map([['portfolio-dashboard-v1', saved(900)], ['portfolio-dashboard-v1:account-A', saved(100)]]);

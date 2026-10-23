@@ -213,3 +213,25 @@ def test_no_action_means_no_mail(memory_store, monkeypatch, mode):
         monkeypatch.setattr(jobs.DashboardService, 'portfolio_snapshot', lambda self, request: {'rebalance': {'ready': True, 'status': 'balanced', 'message': 'balanced'}})
     monkeypatch.setattr(jobs, 'send_email', lambda *args: pytest.fail('Email should not be sent'))
     assert jobs.run_notification()['outcome'] in ('balanced', 'no_portfolio', 'disabled')
+
+
+def test_rebalance_items_keep_names_and_ticker_identifiers():
+    value = snapshot()
+    value['holdings'][0]['name'] = '삼성전자'
+    result = evaluate_rebalance(portfolio(), value)
+    assert result['items'][0]['ticker'] == 'AAA'
+    assert result['items'][0]['name'] == '삼성전자'
+    assert result['items'][-1]['name'] == '현금'
+
+
+def test_email_preserves_stock_names_and_codes(memory_store, monkeypatch):
+    store, _ = memory_store
+    store.write('dashboard.json', SavedDashboard(portfolio=portfolio()).model_dump(mode='json'))
+    value = snapshot()
+    value['holdings'][0]['name'] = '애플'
+    monkeypatch.setattr(jobs.DashboardService, 'portfolio_snapshot', lambda self, request:
+                        value | {'rebalance': evaluate_rebalance(request, value)})
+    sent = []
+    monkeypatch.setattr(jobs, 'send_email', lambda subject, body: sent.append(body))
+    assert jobs.run_notification()['outcome'] == 'sent'
+    assert '애플 (AAA)' in sent[0]

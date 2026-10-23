@@ -5,7 +5,25 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
-from app.services.symbol_search import search_symbols
+from app.services.symbol_search import search_symbols, stock_name
+
+
+@pytest.mark.parametrize('symbol,query,name', [('005930.KS','005930','삼성전자'), ('247540.KQ','247540','에코프로비엠'), ('AAPL','AAPL','애플')])
+def test_stock_name_uses_exact_symbol_match(monkeypatch, symbol, query, name):
+    def search(value, bucket):
+        assert value == query and bucket == 1
+        return [{'ticker': 'OTHER', 'name': '다른 종목'}, {'ticker': symbol, 'name': name}]
+    monkeypatch.setattr('app.services.symbol_search.search_symbols', search)
+    assert stock_name(symbol, 1) == name
+
+
+def test_stock_name_failure_keeps_symbol(monkeypatch):
+    monkeypatch.setattr('app.services.symbol_search.search_symbols', lambda *args: [])
+    assert stock_name('AAPL', 1) == 'AAPL'
+    def unavailable(*args):
+        raise OSError('unavailable')
+    monkeypatch.setattr('app.services.symbol_search.search_symbols', unavailable)
+    assert stock_name('005930.KS', 1) == '005930.KS'
 
 
 def test_search_maps_korean_and_us_markets_and_filters_unsupported(monkeypatch):

@@ -173,6 +173,38 @@ def test_market_partial_failure_does_not_invent_macro_value():
     assert not failed['available'] and 'value' not in failed
 
 
+@pytest.mark.parametrize('ticker,currency,name', [('005930.KS','KRW','삼성전자'), ('AAPL','USD','애플')])
+def test_holding_preserves_resolved_stock_name(ticker, currency, name):
+    class Named(FakeDashboard):
+        def get_quote(self, symbol):
+            result = super().get_quote(symbol)
+            if symbol == ticker:
+                result.update(name=name, currency=currency)
+            return result
+    result = Named().portfolio_snapshot(holdings(positions=[{'ticker':ticker,'quantity':1,'averageCost':50}]))
+    assert result['holdings'][0]['ticker'] == ticker
+    assert result['holdings'][0]['name'] == name
+
+
+def test_quote_includes_name_and_caches_lookup(monkeypatch):
+    class Ticker:
+        def history(self, **kwargs):
+            return pd.DataFrame({'Close':[100,110]}, index=pd.date_range('2026-10-20',periods=2))
+        def get_history_metadata(self):
+            return {'currency':'USD'}
+    calls = []
+    monkeypatch.setattr('app.services.dashboard.yf.Ticker', lambda symbol: Ticker())
+    monkeypatch.setattr('app.services.dashboard.stock_name', lambda symbol,bucket: calls.append(symbol) or '애플')
+    quote.cache_clear()
+    try:
+        assert quote('AAPL',1)['name'] == '애플'
+        assert quote('AAPL',1)['name'] == '애플'
+        quote('KRW=X',1)
+        assert calls == ['AAPL']
+    finally:
+        quote.cache_clear()
+
+
 def test_dashboard_routes_and_lab_are_independent():
     app.dependency_overrides[get_dashboard_service] = lambda: FakeDashboard()
     try:

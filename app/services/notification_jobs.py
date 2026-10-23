@@ -51,7 +51,7 @@ def run_notification(*, test=False):
                  f"보유 정보 수정일: {saved.portfolioSavedAt or '미기록'}", ""]
         for item in check["items"]:
             if item["needsRebalance"]:
-                lines.append(f"{item['ticker']}: 현재 {item['weightPct']:.2f}% / 목표 {item['targetWeightPct']:.2f}% (차이 {item['driftPct']:+.2f}%p)")
+                lines.append(f"{item.get('name', item['ticker'])} ({item['ticker']}): 현재 {item['weightPct']:.2f}% / 목표 {item['targetWeightPct']:.2f}% (차이 {item['driftPct']:+.2f}%p)")
         body = "\n".join([*lines, "", "수동 입력한 수량 기준입니다. 거래 후 보유 정보를 수정해주세요.",
                            "일봉 기준 점검이며 자동 주문은 실행하지 않습니다.", os.environ["APP_BASE_URL"]])
     try:

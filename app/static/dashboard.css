@@ -143,3 +143,12 @@ input,select { width:100%; min-width:0; padding:9px 10px; border:1px solid #dfe6
 #rebalance-status { margin-bottom:12px; }
 [hidden] { display:none !important; }
 @media(max-width:680px) { .editor-labels { display:none; } .owned-row { grid-template-columns:1fr 1fr; padding-bottom:12px; border-bottom:1px solid var(--line); } .owned-row .remove-owned { grid-column:2; justify-self:end; width:32px; } }
+
+.allocation-donut { position:relative; background:none; }
+.allocation-donut>svg { position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
+.allocation-donut .donut-hole { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); pointer-events:none; }
+.allocation-segment { cursor:help; }
+.allocation-segment:hover,.allocation-segment:focus { stroke-width:34; outline:none; }
+.allocation-tooltip { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); max-width:85%; padding:7px 9px; border:1px solid var(--line); border-radius:7px; background:#202d3b; color:white; font-size:11px; text-align:center; pointer-events:none; z-index:2; }
+.allocation-donut:has(.allocation-tooltip:not([hidden])) .donut-hole { visibility:hidden; }
+.owned-name { display:block; margin-top:3px; color:var(--muted); font-size:10px; }

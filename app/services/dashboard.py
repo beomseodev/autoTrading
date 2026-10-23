@@ -14,6 +14,7 @@ import yfinance as yf
 
 from app.dashboard_schemas import PortfolioSnapshotRequest
 from app.services.rebalance_alerts import evaluate_rebalance
+from app.services.symbol_search import stock_name
 
 
 MARKETS = [("^GSPC", "S&P 500", "pt"), ("^IXIC", "나스닥", "pt"), ("^VIX", "변동성 · VIX", "pt"), ("KRW=X", "달러 / 원", "KRW")]
@@ -44,6 +45,7 @@ def quote(symbol: str, bucket: int) -> dict:
     currency = ticker.get_history_metadata().get("currency")
     return {
         "symbol": symbol, "value": value, "previous": previous,
+        "name": stock_name(symbol, bucket) if not symbol.startswith("^") and symbol != "KRW=X" else symbol,
         "changePct": (value / previous - 1) * 100,
         "asOf": close.index[-1].date().isoformat(),
         "previousAsOf": close.index[-2].date().isoformat(), "currency": currency,
@@ -138,7 +140,7 @@ class DashboardService:
                     raise ValueError("종목의 거래 통화를 확인할 수 없습니다.")
                 value = position.quantity * price["value"]
                 cost = position.quantity * position.averageCost
-                return {**item, "currency": currency, "available": True, "price": price["value"],
+                return {**item, "name": price.get("name") or position.ticker, "currency": currency, "available": True, "price": price["value"],
                         "previousPrice": price["previous"], "asOf": price["asOf"],
                         "previousAsOf": price["previousAsOf"],
                         "valueUSD": value if currency == "USD" else value / fx["value"] if fx else None,
