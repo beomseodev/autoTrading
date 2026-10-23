@@ -6,8 +6,9 @@ from app.dashboard_schemas import PortfolioSnapshotRequest
 def evaluate_rebalance(request: PortfolioSnapshotRequest, snapshot: dict, today: date | None = None) -> dict:
     result = {"ready": False, "status": "not_configured", "items": [], "asOf": None,
               "thresholdPct": request.rebalanceTolerancePct,
-              "message": "모든 종목의 목표 비중을 입력하면 리밸런싱을 점검합니다."}
-    if not request.positions or any(p.targetWeight is None for p in request.positions):
+              "message": "모든 종목의 개별 또는 그룹 목표 비중을 입력하면 리밸런싱을 점검합니다."}
+    members = {ticker for group in request.rebalanceGroups for ticker in group.tickers}
+    if not request.positions or any(p.targetWeight is None and p.ticker not in members for p in request.positions):
         return result
     if not snapshot["complete"] or not snapshot["totalValue"]:
         return {**result, "status": "unavailable", "message": "평가금액이나 시세가 부족해 점검을 보류했습니다."}
@@ -26,10 +27,14 @@ def evaluate_rebalance(request: PortfolioSnapshotRequest, snapshot: dict, today:
             not 0 <= (today - observed).days <= 4 for observed in parsed) or stale_fx:
         return {**result, "status": "stale", "message": "종목별 시세 날짜가 다르거나 오래되어 점검을 보류했습니다."}
     total = snapshot["totalValue"]
-    targets = {p.ticker: p.targetWeight for p in request.positions}
-    values = [(item["ticker"], item["value"], targets[item["ticker"]]) for item in snapshot["holdings"]]
-    values.append(("현금", snapshot["cashValue"], max(0, 100 - sum(targets.values()))))
+    targets = {p.ticker: p.targetWeight for p in request.positions if p.ticker not in members}
     names = {item["ticker"]: item.get("name") or item["ticker"] for item in snapshot["holdings"]}
+    values = [(item["ticker"], item["value"], targets[item["ticker"]]) for item in snapshot["holdings"] if item["ticker"] not in members]
+    for group in request.rebalanceGroups:
+        key = " + ".join(group.tickers)
+        names[key] = f"{group.name} ({' + '.join(names[ticker] for ticker in group.tickers)})"
+        values.append((key, sum(item["value"] for item in snapshot["holdings"] if item["ticker"] in group.tickers), group.targetWeight))
+    values.append(("현금", snapshot["cashValue"], max(0, 100 - sum(targets.values()) - sum(g.targetWeight for g in request.rebalanceGroups))))
     rows = []
     for ticker, value, target in values:
         weight = value / total * 100

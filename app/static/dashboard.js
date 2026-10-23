@@ -47,8 +47,21 @@ function validatePortfolio(value) {
   }
   if (value.rebalanceTolerancePct !== undefined && !finiteRange(value.rebalanceTolerancePct, .01, 50)) throw new Error("허용폭은 0.01~50%p로 입력해주세요.");
   if (value.emailAlerts !== undefined && typeof value.emailAlerts !== "boolean") throw new Error("알림 설정을 확인해주세요.");
-  if (value.positions.reduce((sum, item) => sum + (item.targetWeight ?? 0), 0) > 100 + 1e-6) throw new Error("목표 비중 합계는 100% 이하여야 합니다. 남은 비중은 현금입니다.");
-  if (value.emailAlerts && (!value.positions.length || value.positions.some(item => item.targetWeight == null))) throw new Error("이메일 알림에는 모든 종목의 목표 비중이 필요합니다.");
+  const groups = value.rebalanceGroups ?? [];
+  if (!Array.isArray(groups) || groups.length > 15) throw new Error("그룹은 최대 15개까지 설정할 수 있습니다.");
+  const members = new Set(), groupNames = new Set();
+  for (const group of groups) {
+    if (!group || typeof group.name !== "string" || !group.name.trim() || group.name.length > 40 || groupNames.has(group.name.trim()) ||
+        !finiteRange(group.targetWeight, 0, 100) || !Array.isArray(group.tickers) || group.tickers.length < 2 || group.tickers.length > 30) throw new Error("그룹 이름, 목표 비중과 구성 종목 2개 이상을 확인해주세요.");
+    groupNames.add(group.name.trim());
+    for (const ticker of group.tickers) {
+      if (!symbols.has(ticker) || members.has(ticker)) throw new Error("그룹에는 보유 종목만 중복 없이 포함할 수 있습니다.");
+      members.add(ticker);
+    }
+  }
+  if (value.positions.some(item => members.has(item.ticker) && item.targetWeight != null)) throw new Error("그룹에 포함된 종목의 개별 목표 비중은 비워주세요. 그룹 목표만 적용됩니다.");
+  if (value.positions.reduce((sum, item) => sum + (item.targetWeight ?? 0), 0) + groups.reduce((sum, group) => sum + group.targetWeight, 0) > 100 + 1e-6) throw new Error("개별 목표와 그룹 목표의 합계는 100% 이하여야 합니다. 남은 비중은 현금입니다.");
+  if (value.emailAlerts && (!value.positions.length || value.positions.some(item => item.targetWeight == null && !members.has(item.ticker)))) throw new Error("이메일 알림에는 모든 종목의 개별 또는 그룹 목표 비중이 필요합니다.");
 }
 function validateGoal(value) {
   if (!value || !["KRW", "USD"].includes(value.currency) || !finiteRange(value.targetAmount, .01, 1e15) ||
@@ -216,7 +229,20 @@ for (const type of ["pointerout", "focusout"]) $("#allocation-visual").addEventL
   const tooltip = $("#allocation-tooltip");
   if (tooltip) tooltip.hidden = true;
 });
+function renderRebalanceSettings(holdings = []) {
+  const positions = state.portfolio.positions;
+  const names = new Map(holdings.map(item => [item.ticker, item.name || item.ticker]));
+  const targets = positions.filter(item => item.targetWeight != null);
+  const groups = state.portfolio.rebalanceGroups ?? [];
+  const members = new Set(groups.flatMap(group => group.tickers));
+  const complete = positions.length && positions.every(item => item.targetWeight != null || members.has(item.ticker));
+  const labels = targets.map(item => `${names.get(item.ticker) || item.ticker} ${number(item.targetWeight)}%`);
+  labels.push(...groups.map(group => `${group.name} (${group.tickers.map(ticker => names.get(ticker) || ticker).join(" + ")}) ${number(group.targetWeight)}%`));
+  if (complete) labels.push(`현금 ${number(Math.max(0, 100 - targets.reduce((sum, item) => sum + item.targetWeight, 0) - groups.reduce((sum, group) => sum + group.targetWeight, 0)))}%`);
+  $("#rebalance-settings").textContent = `허용폭 ±${number(state.portfolio.rebalanceTolerancePct ?? 5)}%p · ${labels.length ? `목표: ${labels.join(" · ")}${!complete ? " · 미설정 종목 있음" : ""}` : "목표 비중 미설정"}`;
+}
 function renderPortfolio(data) {
+  renderRebalanceSettings(data.holdings);
   const registered = data.hasAssets || Boolean(state.portfolioSavedAt);
   $("#total-assets").textContent = registered && data.complete ? money(data.totalValue) : "—";
   $("#total-caption").textContent = !registered ? "보유 자산을 등록해주세요" : data.complete ? `${data.baseCurrency} 기준 · 주식 + 현금` : "일부 시세 누락 · 총액 계산 보류";
@@ -246,6 +272,7 @@ async function loadPortfolio() {
   ++goalSequence;
   portfolioBusy = true;
   snapshot = null;
+  renderRebalanceSettings();
   $("#rebalance-status").textContent = "최신 시세로 점검하고 있습니다.";
   $("#rebalance-body").textContent = "";
   $("#asset-summary").setAttribute("aria-busy", "true");
@@ -373,6 +400,7 @@ async function searchSymbols() {
         const row = empty || addOwnedRow({ticker: item.ticker});
         row.querySelector('[name=ticker]').value = item.ticker;
         row.querySelector(".owned-name").textContent = item.name;
+        refreshGroupMembers();
         row.querySelector('[name=quantity]').focus();
         clearSymbolSearch();
         $("#symbol-search-status").textContent = `${item.name} 선택됨 · 평균 매입가는 ${item.currency === "KRW" ? "원화" : "달러"}로 입력하세요.`;
@@ -401,12 +429,37 @@ function addOwnedRow(position = {}) {
   $("#add-owned-position").disabled = $("#owned-positions").children.length >= 30;
   return row;
 }
+function refreshGroupMembers() {
+  const tickers = [...$("#owned-positions").children].map(row => row.querySelector('[name=ticker]').value.trim().toUpperCase()).filter(Boolean);
+  for (const row of $("#rebalance-groups").children) {
+    const selected = new Set([...row.querySelectorAll('[name=groupMember]:checked')].map(input => input.value));
+    const options = [...new Set([...tickers, ...selected])];
+    row.querySelector('.group-members').innerHTML = options.map(ticker => {
+      const name = snapshot?.holdings.find(item => item.ticker === ticker)?.name;
+      return `<label><input type="checkbox" name="groupMember" value="${esc(ticker)}"${selected.has(ticker) ? " checked" : ""}>${esc(name ? `${name} (${ticker})` : ticker)}${tickers.includes(ticker) ? "" : " · 보유 목록에서 삭제됨"}</label>`;
+    }).join("") || '<span class="muted">먼저 보유 종목을 입력해주세요.</span>';
+  }
+}
+function addRebalanceGroup(group = {}) {
+  if ($("#rebalance-groups").children.length >= 15) return;
+  const row = document.createElement("div");
+  row.className = "rebalance-group";
+  row.innerHTML = `<div class="field-grid"><label>그룹 이름<input name="groupName" maxlength="40" required placeholder="예: 배당 ETF" value="${esc(group.name ?? "")}"></label><label>그룹 목표 비중 (%)<input name="groupTarget" type="number" min="0" max="100" step="0.01" required value="${esc(group.targetWeight ?? "")}"></label></div><div class="group-members">${(group.tickers ?? []).map(ticker => `<input name="groupMember" type="checkbox" checked value="${esc(ticker)}">`).join("")}</div><button class="text-button" type="button">그룹 삭제</button>`;
+  row.querySelector('button').addEventListener("click", () => row.remove());
+  $("#rebalance-groups").appendChild(row);
+  refreshGroupMembers();
+}
+$("#add-rebalance-group").addEventListener("click", () => addRebalanceGroup());
+$("#owned-positions").addEventListener("input", refreshGroupMembers);
+$("#owned-positions").addEventListener("click", refreshGroupMembers);
 function openPortfolio() {
   if (cloudLoading) { message("계정 정보를 확인하고 있습니다. 잠시 후 다시 시도해주세요."); return; }
   clearSymbolSearch();
   $("#symbol-query").value = "";
   $("#owned-positions").textContent = "";
   if (state.portfolio.positions.length) state.portfolio.positions.forEach(addOwnedRow); else addOwnedRow();
+  $("#rebalance-groups").textContent = "";
+  (state.portfolio.rebalanceGroups ?? []).forEach(addRebalanceGroup);
   for (const name of ["cashKRW", "cashUSD", "baseCurrency"]) $("#portfolio-form").elements[name].value = state.portfolio[name];
   $("#portfolio-form").elements.rebalanceTolerancePct.value = state.portfolio.rebalanceTolerancePct ?? 5;
   $("#portfolio-form").elements.emailAlerts.checked = state.portfolio.emailAlerts ?? false;
@@ -441,7 +494,8 @@ $("#portfolio-form").addEventListener("submit", async event => {
       return [{ticker: inputs[0].toUpperCase(), quantity: Number(inputs[1]), averageCost: Number(inputs[2]), targetWeight: target === "" ? null : Number(target)}];
     });
     const data = new FormData(event.target);
-    const portfolio = {positions, cashKRW: Number(data.get("cashKRW")), cashUSD: Number(data.get("cashUSD")), baseCurrency: data.get("baseCurrency"), rebalanceTolerancePct: Number(data.get("rebalanceTolerancePct")), emailAlerts: data.has("emailAlerts")};
+    const rebalanceGroups = [...$("#rebalance-groups").children].map(row => ({name: row.querySelector('[name=groupName]').value.trim(), targetWeight: Number(row.querySelector('[name=groupTarget]').value), tickers: [...row.querySelectorAll('[name=groupMember]:checked')].map(input => input.value)}));
+    const portfolio = {positions, rebalanceGroups, cashKRW: Number(data.get("cashKRW")), cashUSD: Number(data.get("cashUSD")), baseCurrency: data.get("baseCurrency"), rebalanceTolerancePct: Number(data.get("rebalanceTolerancePct")), emailAlerts: data.has("emailAlerts")};
     validatePortfolio(portfolio);
     await persistState({...state, portfolio, portfolioSavedAt: new Date().toISOString()});
     $("#portfolio-dialog").close();

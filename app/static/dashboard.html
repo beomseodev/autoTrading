@@ -65,6 +65,7 @@
 
       <section class="card holdings-card" id="rebalance" aria-labelledby="rebalance-title">
         <div class="card-header"><div><h2 id="rebalance-title">리밸런싱 점검</h2><p class="muted">목표 비중과 실제 비중 비교 · 현금 포함</p></div><button class="text-button" data-edit-portfolio type="button">목표 비중 설정 ↗</button></div>
+        <div id="rebalance-settings" class="rebalance-settings" aria-label="설정한 리밸런싱 기준"></div>
         <p id="rebalance-status" role="status">보유 자산과 목표 비중을 입력해주세요.</p>
         <div class="table-scroll"><table><thead><tr><th>자산</th><th class="number">현재 비중</th><th class="number">목표 비중</th><th class="number">차이 (%p)</th><th class="number">목표까지 조정금액</th></tr></thead><tbody id="rebalance-body"></tbody></table></div>
         <p id="email-status" class="card-note" role="status"></p><button id="test-email-btn" class="button quiet" type="button" disabled>본인에게 테스트 메일 보내기</button>
@@ -99,9 +100,12 @@
       <div class="editor-labels"><span>종목 코드</span><span>보유 수량</span><span>평균 매입가 (현지 통화)</span><span>목표 비중 (%)</span><span></span></div>
       <div id="owned-positions"></div>
       <button type="button" class="text-button add-row" id="add-owned-position">+ 종목 추가</button>
+      <div class="card-header"><h3>묶어서 목표 비중 설정</h3><button id="add-rebalance-group" class="text-button" type="button">+ 그룹 추가</button></div>
+      <p class="muted">보유 종목을 2개 이상 선택하세요. 그룹에 포함된 종목의 개별 목표는 비워두고, 그룹 전체의 목표를 입력하세요. 남은 비중은 현금입니다.</p>
+      <div id="rebalance-groups"></div>
       <div class="field-grid"><label>원화 현금 (₩)<input type="number" name="cashKRW" min="0" max="1000000000000000" step="0.01" value="0" required /></label><label>달러 현금 ($)<input type="number" name="cashUSD" min="0" max="1000000000000" step="0.01" value="0" required /></label><label>대시보드 표시 통화<select name="baseCurrency"><option value="KRW">원화 (KRW)</option><option value="USD">달러 (USD)</option></select></label></div>
       <div class="field-grid"><label>리밸런싱 허용폭 (%p)<input name="rebalanceTolerancePct" type="number" min="0.01" max="50" step="0.01" value="5" required /></label><label class="check-field"><input name="emailAlerts" type="checkbox" />허용폭 초과 시 이메일 알림 받기</label></div>
-      <p class="card-note">목표 비중의 합계는 100% 이하로 입력하며 나머지는 현금 목표 비중입니다. 목표 비중은 선택 입력이지만 이메일 알림에는 모든 종목의 목표가 필요합니다. 예: 목표 30%, 허용폭 5%p이면 25% 미만 또는 35% 초과 시 알립니다.</p>
+      <p class="card-note">개별 목표와 그룹 목표의 합계는 100% 이하이며 나머지는 현금 목표입니다. 한 종목은 한 그룹에만 포함할 수 있습니다. 그룹 내부 비율은 점검하지 않습니다. 이메일 알림에는 모든 종목의 개별 또는 그룹 목표가 필요합니다. 예: 목표 30%, 허용폭 5%p이면 25% 미만 또는 35% 초과 시 알립니다.</p>
       <p id="portfolio-form-status" class="form-status" role="status"></p>
       <div class="dialog-actions"><button type="button" class="button quiet" data-close-dialog>취소</button><button type="submit" class="button primary">저장하고 현황 보기</button></div>
     </form>

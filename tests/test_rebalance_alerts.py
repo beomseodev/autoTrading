@@ -74,6 +74,103 @@ def test_drift_and_cash_target_are_percentage_points():
     assert sum(item["adjustmentValue"] for item in result["items"]) == pytest.approx(0)
 
 
+def grouped_portfolio(**updates):
+    return portfolio(positions=[{"ticker": ticker, "quantity": 1, "averageCost": 0} for ticker in ("AAA", "BBB")],
+                     rebalanceGroups=[{"name": "배당 ETF", "tickers": ["AAA", "BBB"], "targetWeight": 60}], **updates)
+
+
+def test_group_uses_combined_value_and_preserves_cash_and_individual_targets():
+    request = grouped_portfolio()
+    value = snapshot(cashValue=40, holdings=[dict(snapshot()["holdings"][0], value=50), dict(snapshot()["holdings"][1], value=10)])
+    result = evaluate_rebalance(request, value)
+    assert result['status'] == 'balanced'
+    assert len(result['items']) == 2
+    group, cash = result['items']
+    assert group['ticker'] == 'AAA + BBB' and '배당 ETF' in group['name']
+    assert group['weightPct'] == group['targetWeightPct'] == 60
+    assert cash['targetWeightPct'] == 40
+    # Shifting value within the group must not trigger a rebalance.
+    value['holdings'][0]['value'], value['holdings'][1]['value'] = 5, 55
+    assert evaluate_rebalance(request, value)['status'] == 'balanced'
+    request.positions.append(type(request.positions[0])(ticker='CCC', quantity=1, averageCost=0, targetWeight=20))
+    value['holdings'].append(dict(value['holdings'][0], ticker='CCC', value=10))
+    value['cashValue'] = 30
+    mixed = evaluate_rebalance(request, value)
+    assert mixed['status'] == 'rebalance_needed'
+    assert mixed['items'][0]['ticker'] == 'CCC'
+    assert mixed['items'][-1]['targetWeightPct'] == 20
+    assert sum(row['adjustmentValue'] for row in mixed['items']) == pytest.approx(0)
+    assert not evaluate_rebalance(request, value | {'complete':False})['ready']
+
+
+@pytest.mark.parametrize('groups', [
+    [{'name':'x','tickers':['AAA'],'targetWeight':60}],
+    [{'name':'x','tickers':['AAA','AAA'],'targetWeight':60}],
+    [{'name':'x','tickers':['AAA','CCC'],'targetWeight':60}],
+    [{'name':'x','tickers':['AAA','BBB'],'targetWeight':60}] * 2,
+    [{'name':' ','tickers':['AAA','BBB'],'targetWeight':60}],
+    [{'name':'x','tickers':['AAA','BBB'],'targetWeight':101}],
+    [{'name':'x','tickers':['AAA','BBB'],'targetWeight':float('nan')}],
+])
+def test_invalid_groups_rejected(groups):
+    with pytest.raises(ValueError):
+        portfolio(positions=[{'ticker':ticker,'quantity':1,'averageCost':0} for ticker in ('AAA','BBB')], rebalanceGroups=groups)
+
+
+def test_group_member_cannot_also_have_individual_target():
+    with pytest.raises(ValueError):
+        portfolio(rebalanceGroups=[{'name':'x','tickers':['AAA','BBB'],'targetWeight':60}])
+
+
+def test_group_state_roundtrip(memory_store):
+    client = TestClient(app)
+    state = SavedDashboard(portfolio=grouped_portfolio(emailAlerts=False)).model_dump(mode='json')
+    assert client.post('/api/dashboard/state', json={'state':state}).status_code == 200
+    assert client.get('/api/dashboard/state').json()['state'] == state
+
+
+def test_rebalance_items_keep_names_and_ticker_identifiers():
+    value = snapshot()
+    value['holdings'][0]['name'] = '삼성전자'
+    result = evaluate_rebalance(portfolio(), value)
+    assert result['items'][0]['ticker'] == 'AAA'
+    assert result['items'][0]['name'] == '삼성전자'
+    assert result['items'][-1]['name'] == '현금'
+
+
+def test_email_preserves_stock_names_and_codes(memory_store, monkeypatch):
+    store, _ = memory_store
+    store.write('dashboard.json', SavedDashboard(portfolio=portfolio()).model_dump(mode='json'))
+    value = snapshot()
+    value['holdings'][0]['name'] = '애플'
+    monkeypatch.setattr(jobs.DashboardService, 'portfolio_snapshot', lambda self, request:
+                        value | {'rebalance': evaluate_rebalance(request, value)})
+    sent = []
+    monkeypatch.setattr(jobs, 'send_email', lambda subject, body: sent.append(body))
+    assert jobs.run_notification()['outcome'] == 'sent'
+    assert '애플 (AAA)' in sent[0]
+
+
+def test_group_email_uses_combined_target_and_sends_once(memory_store, monkeypatch):
+    store, _ = memory_store
+    store.write('dashboard.json', SavedDashboard(portfolio=grouped_portfolio()).model_dump(mode='json'))
+    sent = []
+    monkeypatch.setattr(jobs, 'send_email', lambda subject, body: sent.append(body))
+    assert jobs.run_notification()['outcome'] == 'sent'
+    assert jobs.run_notification()['outcome'] == 'already_attempted'
+    assert len(sent) == 1
+    assert '배당 ETF (AAA + BBB)' in sent[0]
+    assert '현재 100.00% / 목표 60.00%' in sent[0]
+
+
+def test_group_and_individual_targets_cannot_exceed_total():
+    with pytest.raises(ValueError, match='100%'):
+        portfolio(positions=[{'ticker': ticker, 'quantity': 1, 'averageCost': 0,
+                              'targetWeight': 50 if ticker == 'CCC' else None}
+                             for ticker in ('AAA', 'BBB', 'CCC')],
+                  rebalanceGroups=[{'name': 'group', 'tickers': ['AAA', 'BBB'], 'targetWeight': 60}])
+
+
 def test_exact_band_boundary_does_not_trigger():
     value = snapshot(holdings=[dict(snapshot()["holdings"][0], value=55), dict(snapshot()["holdings"][1], value=45)])
     assert evaluate_rebalance(portfolio(), value)["status"] == "balanced"
@@ -213,25 +310,3 @@ def test_no_action_means_no_mail(memory_store, monkeypatch, mode):
         monkeypatch.setattr(jobs.DashboardService, 'portfolio_snapshot', lambda self, request: {'rebalance': {'ready': True, 'status': 'balanced', 'message': 'balanced'}})
     monkeypatch.setattr(jobs, 'send_email', lambda *args: pytest.fail('Email should not be sent'))
     assert jobs.run_notification()['outcome'] in ('balanced', 'no_portfolio', 'disabled')
-
-
-def test_rebalance_items_keep_names_and_ticker_identifiers():
-    value = snapshot()
-    value['holdings'][0]['name'] = '삼성전자'
-    result = evaluate_rebalance(portfolio(), value)
-    assert result['items'][0]['ticker'] == 'AAA'
-    assert result['items'][0]['name'] == '삼성전자'
-    assert result['items'][-1]['name'] == '현금'
-
-
-def test_email_preserves_stock_names_and_codes(memory_store, monkeypatch):
-    store, _ = memory_store
-    store.write('dashboard.json', SavedDashboard(portfolio=portfolio()).model_dump(mode='json'))
-    value = snapshot()
-    value['holdings'][0]['name'] = '애플'
-    monkeypatch.setattr(jobs.DashboardService, 'portfolio_snapshot', lambda self, request:
-                        value | {'rebalance': evaluate_rebalance(request, value)})
-    sent = []
-    monkeypatch.setattr(jobs, 'send_email', lambda subject, body: sent.append(body))
-    assert jobs.run_notification()['outcome'] == 'sent'
-    assert '애플 (AAA)' in sent[0]
