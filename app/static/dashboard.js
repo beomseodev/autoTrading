@@ -529,11 +529,14 @@ async function loadPortfolio() {
 
 function showGoalPending(text) {
   projectionView = null;
+  $("#goal-current-position").textContent = "현재 위치 계산 대기";
   $("#goal-overview").innerHTML = `<div><span class="muted">가정상 목표 도달 시점</span><strong>${state.goal ? "계산 대기" : "목표를 설정해주세요"}</strong><p>${esc(text)}</p></div><div class="goal-amount"><span>목표 금액</span><b>${state.goal ? money(state.goal.targetAmount, state.goal.currency) : "—"}</b></div>`;
   $("#projection-chart").classList.add("empty-chart");
   $("#projection-chart").textContent = text;
   $("#goal-scenarios").textContent = "";
   $("#goal-progress").setAttribute("aria-valuenow", "0");
+  $("#goal-progress").removeAttribute("aria-valuetext");
+  $("#goal-progress").style.setProperty("--current-progress", "0%");
   $("#goal-progress span").style.width = "0%";
   $("#progress-labels").innerHTML = `<span>현재 자산 확인 필요</span><span>${state.goal ? money(state.goal.targetAmount, state.goal.currency) : "목표 미설정"}</span>`;
 }
@@ -554,8 +557,12 @@ function renderProjection(data, initial) {
   const goal = state.goal;
   const base = data.scenarios[1];
   $("#goal-overview").innerHTML = `<div><span class="muted">입력 가정상 목표 도달 시점</span><strong>${goalDate(base)}</strong><p>매월 ${money(goal.monthlyContribution, goal.currency)} · 연 ${number(goal.annualReturnPct)}% 가정</p></div><div class="goal-amount"><span>목표 금액 · ${goal.currency}</span><b>${money(goal.targetAmount, goal.currency)}</b></div>`;
-  const progress = Math.min(100, Math.max(0, initial / goal.targetAmount * 100));
+  const achievementPct = initial / goal.targetAmount * 100;
+  const progress = Math.min(100, Math.max(0, achievementPct));
+  $("#goal-current-position").textContent = `현재 ${money(initial, goal.currency)} · 목표의 ${number(achievementPct, 1)}%`;
   $("#goal-progress").setAttribute("aria-valuenow", progress.toFixed(2));
+  $("#goal-progress").setAttribute("aria-valuetext", $("#goal-current-position").textContent);
+  $("#goal-progress").style.setProperty("--current-progress", `${progress}%`);
   $("#goal-progress span").style.width = `${progress}%`;
   $("#progress-labels").innerHTML = `<span>현재 ${money(initial, goal.currency)}</span><span>${number(progress, 1)}% 달성</span>`;
   $("#goal-scenarios").innerHTML = data.scenarios.map((scenario, index) => `<div class="scenario-result ${index === 1 ? "base" : ""}"><span>${esc(scenario.label)} · 연 ${number(scenario.annualReturnPct)}%</span><b>${goalDate(scenario)}</b></div>`).join("");
@@ -572,8 +579,10 @@ function renderProjection(data, initial) {
     return `<line x1="${left}" y1="${y(value)}" x2="${width-right}" y2="${y(value)}" stroke="#edf1f4"/><text x="${left-7}" y="${y(value)+3}" text-anchor="end" fill="#9aa6af" font-size="9">${new Intl.NumberFormat("ko-KR", {notation: "compact", maximumFractionDigits: 1}).format(value)}</text>`;
   }).join("");
   const lines = data.scenarios.map((scenario, index) => `<polyline class="${index === 1 ? "projection-base" : "projection-detail"}" points="${scenario.points.map(point => `${x(point)},${y(point.value)}`).join(" ")}" fill="none" stroke="${lineColors[index]}" stroke-width="${index === 1 ? 2.5 : 1.5}" ${index === 1 ? "" : 'stroke-dasharray="4 4"'}/>`).join("");
+  const currentY = y(initial);
+  const currentMarker = `<g class="projection-current" aria-label="현재 자산 ${esc(money(initial, goal.currency))}, 목표의 ${number(achievementPct, 1)}%. 전망의 시작점입니다."><line x1="${left}" y1="${top}" x2="${left}" y2="${height-bottom}" stroke="#087d68" stroke-width="1.5" stroke-dasharray="4 3"/><circle cx="${left}" cy="${currentY}" r="5" fill="#087d68" stroke="white" stroke-width="2"/><path d="M ${left+36} ${currentY} H ${left+10} M ${left+16} ${currentY-4} L ${left+10} ${currentY} L ${left+16} ${currentY+4}" fill="none" stroke="#087d68" stroke-width="2"/><text x="${left+42}" y="${Math.max(top+12, Math.min(height-bottom-4, currentY-9))}" fill="#087d68" font-size="11" font-weight="700">현재 ${number(achievementPct, 1)}%</text></g>`;
   $("#projection-chart").classList.remove("empty-chart");
-  $("#projection-chart").innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="목표 자산 전망. ${width <= 440 ? `입력 가정 ${goalDate(base)}만 표시` : `낮은 가정 ${goalDate(data.scenarios[0])}, 입력 가정 ${goalDate(base)}, 높은 가정 ${goalDate(data.scenarios[2])}`}. 세로축 ${goal.currency}, 가로축 경과 기간.">${grid}<line x1="${left}" y1="${y(goal.targetAmount)}" x2="${width-right}" y2="${y(goal.targetAmount)}" stroke="#d4b477" stroke-dasharray="3 4"/>${lines}<text x="${left}" y="${height-6}" fill="#9aa6af" font-size="9">현재</text><text x="${width-right}" y="${height-6}" text-anchor="end" fill="#9aa6af" font-size="9">${esc(data.scenarios[0].points.at(-1).date.slice(0,7))} · ${goal.currency}</text></svg>`;
+  $("#projection-chart").innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="목표 자산 전망. ${width <= 440 ? `입력 가정 ${goalDate(base)}만 표시` : `낮은 가정 ${goalDate(data.scenarios[0])}, 입력 가정 ${goalDate(base)}, 높은 가정 ${goalDate(data.scenarios[2])}`}. 현재 자산 ${esc(money(initial, goal.currency))}, 목표의 ${number(achievementPct, 1)}%. 세로축 ${goal.currency}, 가로축 경과 기간.">${grid}<line x1="${left}" y1="${y(goal.targetAmount)}" x2="${width-right}" y2="${y(goal.targetAmount)}" stroke="#d4b477" stroke-dasharray="3 4"/>${lines}${currentMarker}<text x="${left}" y="${height-6}" fill="#9aa6af" font-size="9">현재</text><text x="${width-right}" y="${height-6}" text-anchor="end" fill="#9aa6af" font-size="9">${esc(data.scenarios[0].points.at(-1).date.slice(0,7))} · ${goal.currency}</text></svg>`;
 }
 async function loadGoal() {
   const sequence = ++goalSequence;
