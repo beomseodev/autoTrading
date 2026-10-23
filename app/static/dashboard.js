@@ -5,8 +5,8 @@ let accountSub = null;
 let ownerAccount = false;
 const COLORS = ["#0b8f76", "#6487d5", "#a68bce", "#e5b364", "#6cabb5", "#bd8696", "#99a7b5"];
 const $ = selector => document.querySelector(selector);
-const PANEL_SPANS = {market: 12, summary: 12, goal: 8, macro: 4, rebalance: 8, holdings: 4, allocation: 8};
-const DEFAULT_HIDDEN_PANELS = new Set();
+const PANEL_SPANS = {market: 12, summary: 12, goal: 8, macro: 4, rebalance: 8, holdings: 4, allocation: 8, performance: 4};
+const DEFAULT_HIDDEN_PANELS = new Set(["performance"]);
 let panelLayout = {};
 let layoutReady = false;
 let layoutPending = false;
@@ -464,6 +464,10 @@ function renderRebalanceSettings(holdings = []) {
 }
 function renderPortfolio(data) {
   renderRebalanceSettings(data.holdings);
+  const ranked = data.holdings.filter(item => item.available && Number.isFinite(item.profitPct)).sort((a, b) => b.profitPct - a.profitPct);
+  const unknown = data.holdings.length - ranked.length;
+  $("#performance-status").textContent = `${ranked.length}개 종목 · 수익률 높은 순${unknown ? ` · 시세 또는 매입가 미확인 ${unknown}개 제외` : ""}${ranked.length ? "" : " · 보유 수량과 평균 매입가를 확인해주세요."}`;
+  $("#performance-list").innerHTML = ranked.map(item => `<li><span><strong>${esc(item.name || item.ticker)}</strong><small>${esc(item.ticker)} · 가격 기준일 ${esc(item.asOf)}</small></span><b class="${tone(item.profitPct)}">${pct(item.profitPct)}</b></li>`).join("");
   const registered = data.hasAssets || Boolean(state.portfolioSavedAt);
   $("#total-assets").textContent = registered && data.complete ? money(data.totalValue) : "—";
   $("#total-caption").textContent = !registered ? "보유 자산을 등록해주세요" : data.complete ? `${data.baseCurrency} 기준 · 주식 + 현금` : "일부 시세 누락 · 총액 계산 보류";
@@ -496,6 +500,8 @@ async function loadPortfolio() {
   portfolioBusy = true;
   snapshot = null;
   renderRebalanceSettings();
+  $("#performance-status").textContent = "최신 시세로 수익률을 확인하고 있습니다.";
+  $("#performance-list").textContent = "";
   $("#rebalance-status").textContent = "최신 시세로 점검하고 있습니다.";
   $("#rebalance-body").textContent = "";
   $("#asset-summary").setAttribute("aria-busy", "true");
@@ -517,6 +523,7 @@ async function loadPortfolio() {
       message(error.message || "자산 평가에 실패했습니다.");
       showGoalPending("자산 평가를 완료한 뒤 계산할 수 있습니다.");
       $("#rebalance-status").textContent = "자산 평가에 실패해 리밸런싱 점검을 보류했습니다.";
+      $("#performance-status").textContent = "시세 조회 실패 · 새로고침해주세요.";
     }
   } finally {
     if (sequence === portfolioSequence) {
