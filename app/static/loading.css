@@ -1,0 +1,17 @@
+.loading-indicator::before {
+  content: "";
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  margin-right: .5em;
+  vertical-align: -.15em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: loading-spin .8s linear infinite;
+}
+.data-loading { color: #087d68; font-size: 13px; margin: 0 0 13px; }
+@keyframes loading-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .loading-indicator::before { animation: none; }
+}

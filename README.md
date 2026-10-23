@@ -104,10 +104,16 @@ tests/
 .venv/Scripts/python -m pytest -q
 node --test tests/*.cjs
 node tests/browser/dashboard.cjs
+node tests/browser/loading.cjs
 ```
 
-Node 테스트는 기능별 파일로 관리하며 공통 브라우저 모의 환경을 재사용합니다.
+Node 테스트는 계정 분리, 종목명, 그룹 리밸런싱, 위젯 배치, 목표 현재 위치,
+수익률 순위, 로딩 상태별 파일로 나뉩니다. 브라우저 검사는 Windows의 Google Chrome을
+사용하며, 모의 API 응답으로 동작하므로 실제 계정이나 시세 서비스가 필요하지 않습니다.
+화면 확인용 이미지는 `output/`에 저장합니다.
 
+- 대시보드 첫 진입·조회·검색과 실험실 분석 중에는 회전 아이콘과 진행 문구를 표시합니다.
+  동시 요청이 모두 끝나거나 실패하면 로딩 상태를 해제하며, 동작 줄이기 설정을 따릅니다.
 
 ### 수동 포트폴리오 저장과 리밸런싱 이메일
 

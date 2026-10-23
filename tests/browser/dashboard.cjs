@@ -7,6 +7,7 @@ fs.mkdirSync('output', {recursive:true});
 const files = {
   '/': ['text/html', fs.readFileSync('app/static/dashboard.html')],
   '/static/dashboard.js': ['text/javascript', fs.readFileSync('app/static/dashboard.js')],
+  '/static/loading.css': ['text/css', fs.readFileSync('app/static/loading.css')],
   '/static/dashboard.css': ['text/css', fs.readFileSync('app/static/dashboard.css')],
 };
 const server = http.createServer((req, res) => {

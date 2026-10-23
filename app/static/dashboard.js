@@ -309,14 +309,26 @@ function restoreState() {
     message("저장된 정보를 읽지 못했습니다. 원본은 유지됩니다. 새로 저장할 때 기존 원본을 복구용으로 보관합니다. 저장소 접근이 차단된 경우 브라우저 설정을 확인해주세요.");
   }
 }
+let pendingRequests = 0;
+function startLoading() {
+  pendingRequests++;
+  $("#data-loading").hidden = false;
+}
+function finishLoading() {
+  pendingRequests--;
+  $("#data-loading").hidden = pendingRequests === 0;
+}
 async function api(path, body) {
-  const headers = accountSub ? {"X-Portfolio-Account": accountSub} : {};
-  if (body !== undefined) headers["Content-Type"] = "application/json";
-  const response = await fetch(path, body === undefined ? {headers} : {method: "POST", headers, body: JSON.stringify(body)});
-  const result = await response.json();
-  if (response.status === 401) { location.assign("/login"); throw new Error("다시 로그인해주세요."); }
-  if (!response.ok) throw new Error(typeof result.detail === "string" ? result.detail : "입력값을 확인하거나 잠시 후 다시 시도해주세요.");
-  return result;
+  startLoading();
+  try {
+    const headers = accountSub ? {"X-Portfolio-Account": accountSub} : {};
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    const response = await fetch(path, body === undefined ? {headers} : {method: "POST", headers, body: JSON.stringify(body)});
+    const result = await response.json();
+    if (response.status === 401) { location.assign("/login"); throw new Error("다시 로그인해주세요."); }
+    if (!response.ok) throw new Error(typeof result.detail === "string" ? result.detail : "입력값을 확인하거나 잠시 후 다시 시도해주세요.");
+    return result;
+  } finally { finishLoading(); }
 }
 function renderEmailStatus(status = null) {
   $("#test-email-btn").hidden = !ownerAccount;
@@ -389,7 +401,12 @@ $("#test-email-btn").addEventListener("click", async () => {
   catch (error) { $("#email-status").textContent = error.message; }
   finally { $("#test-email-btn").disabled = !cloudReady || !emailReady; }
 });
-function updateRefreshButton() { $("#refresh-btn").disabled = portfolioBusy || marketBusy; }
+function updateRefreshButton() {
+  const busy = portfolioBusy || marketBusy;
+  $("#refresh-btn").disabled = busy;
+  $("#refresh-btn").textContent = busy ? "불러오는 중…" : "↻ 새로고침";
+  $("#refresh-btn").classList.toggle("loading-indicator", busy);
+}
 
 function renderMarket(data) {
   $("#market-strip").innerHTML = data.markets.map(item => `<article class="market-item"><span>${esc(item.label)}</span><strong>${item.available ? number(item.value) : "—"}</strong><small class="${item.available ? tone(item.changePct) : "muted"}">${item.available ? pct(item.changePct) : "조회 불가"}</small><a class="market-meta" href="${esc(item.source)}" target="_blank" rel="noopener noreferrer">${item.available ? `가격 기준일 ${esc(item.asOf)} · Yahoo Finance ↗` : "출처 확인 ↗"}</a></article>`).join("");
@@ -398,6 +415,8 @@ function renderMarket(data) {
 async function loadMarkets() {
   const sequence = ++marketSequence;
   marketBusy = true;
+  $("#market-strip").setAttribute("aria-busy", "true");
+  $("#macro-list").setAttribute("aria-busy", "true");
   updateRefreshButton();
   try {
     const data = await api("/api/dashboard/markets");
@@ -608,6 +627,7 @@ async function loadGoal() {
 let symbolSearchSequence = 0;
 function clearSymbolSearch() {
   symbolSearchSequence++;
+  $("#symbol-search-status").classList.remove("loading-indicator");
   $("#symbol-results").replaceChildren();
   $("#symbol-search-status").textContent = "";
 }
@@ -617,6 +637,7 @@ async function searchSymbols() {
   if (!query) return;
   const sequence = symbolSearchSequence;
   $("#symbol-search-status").textContent = "검색 중…";
+  $("#symbol-search-status").classList.add("loading-indicator");
   try {
     const data = await api(`/api/dashboard/symbols?q=${encodeURIComponent(query)}`);
     if (sequence !== symbolSearchSequence) return;
@@ -651,6 +672,8 @@ async function searchSymbols() {
     }
   } catch (error) {
     if (sequence === symbolSearchSequence) $("#symbol-search-status").textContent = error.message;
+  } finally {
+    if (sequence === symbolSearchSequence) $("#symbol-search-status").classList.remove("loading-indicator");
   }
 }
 $("#search-symbols").addEventListener("click", searchSymbols);
@@ -759,6 +782,7 @@ $("#goal-form").addEventListener("submit", async event => {
 });
 
 async function initializeAccount() {
+  startLoading();
   try {
     const response = await fetch("/auth/session");
     if (!response.ok) throw new Error("로그인 상태를 확인하지 못했습니다.");
@@ -793,6 +817,7 @@ async function initializeAccount() {
     setupDashboardLayout();
     loadPortfolio();
   } catch { message("로그인 상태를 확인하지 못했습니다. 새로고침해주세요."); }
+  finally { finishLoading(); }
 }
 initializeAccount();
 document.addEventListener("visibilitychange", async () => {

@@ -286,9 +286,18 @@ function syncInactiveFields() {
 function lockControls(container, extras = []) {
   const controls = [...container.querySelectorAll("input, select, button"), ...extras];
   const states = controls.map(control => control.disabled);
+  const button = container.querySelector('button[type="submit"]');
+  const label = button.textContent;
+  const status = container.querySelector('[role="status"]');
+  button.textContent = "분석 중…";
+  button.classList.add("loading-indicator");
+  status.classList.add("loading-indicator");
   controls.forEach(control => { control.disabled = true; });
   container.setAttribute("aria-busy", "true");
   return () => {
+    button.textContent = label;
+    button.classList.remove("loading-indicator");
+    status.classList.remove("loading-indicator");
     controls.forEach((control, index) => { control.disabled = states[index]; });
     container.removeAttribute("aria-busy");
   };

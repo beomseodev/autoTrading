@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>나의 투자 대시보드</title>
   <link rel="stylesheet" href="/static/dashboard.css" />
+  <link rel="stylesheet" href="/static/loading.css" />
   <script src="/static/dashboard.js" defer></script>
 </head>
 <body>
@@ -27,6 +28,7 @@
       <div><p class="eyebrow">MY INVESTMENT OVERVIEW</p><h1>나의 자산, 한눈에</h1><p class="subtitle">보유 자산부터 시장의 흐름, 목표까지의 거리까지.</p></div>
       <div class="header-actions"><span id="updated-at">시세 확인 중</span><button id="refresh-btn" class="button quiet" type="button">↻ 새로고침</button><button class="button primary" data-edit-portfolio type="button">보유 자산 편집</button></div>
     </header>
+    <p id="data-loading" class="data-loading loading-indicator" role="status">데이터를 불러오는 중…</p>
     <p id="app-status" class="app-status" role="status"></p>
     <p id="cloud-status" class="card-note" role="status">저장된 포트폴리오를 확인하고 있습니다.</p>
     <button id="sync-local-btn" class="button quiet" type="button" hidden>이 브라우저의 자산·목표를 계정에 저장</button>
