@@ -136,34 +136,43 @@ def mark_corrections(conn, instrument_id, cached, snapshot, new_hash):
                 (json_value({"status":"needs_review","reason":"돌파 근거 자료가 정정되었습니다. 조건 확인 후 재개해주세요.","triggers":[]}),rule["id"]))
     events = conn.execute("""SELECT e.*,r.kind FROM alert_events e JOIN alert_rules r ON r.id=e.rule_id
         WHERE (e.instrument_id=%s OR e.payload->>'benchmarkId'=%s OR e.payload->'sourceIds' ? %s) AND e.created_at>=now()-interval '180 days'""", (instrument_id,str(instrument_id),str(instrument_id))).fetchall()
+    corrections=[]
+    results={}
+    old_hash=fingerprint(old)
     for event in events:
         if event['kind'] in INFORMATION_TYPES:
             info=event['payload'].get('information',{})
             if event['kind']=='dividend_change' and actions!=old['splits'] and info.get('comparisonDate') and any(info['comparisonDate']<s['date']<=info['date'] for s in actions+old['splits']):
-                conn.execute('UPDATE alert_events SET correction=%s WHERE id=%s',(json_value({'reason':'배당 비교 구간 분할 자료 정정'}),event['id']))
+                corrections.append(({'reason':'배당 비교 구간 분할 자료 정정'},event['id']))
             continue
         if event['kind'] in HOLDING_TYPES:
             dates=list(event['payload']['result']['state']['dates'].values())+list(event['payload']['result'].get('previousDates',{}).values())
             if changed_days.intersection(dates):
-                conn.execute('UPDATE alert_events SET correction=%s WHERE id=%s',(json_value({'reason':'보유자산 평가에 사용된 자료 정정','instrumentId':str(instrument_id),'previousHash':fingerprint(old),'newHash':new_hash}),event['id']))
+                corrections.append(({'reason':'보유자산 평가에 사용된 자료 정정','instrumentId':str(instrument_id),'previousHash':old_hash,'newHash':new_hash},event['id']))
             continue
         if event["kind"]=="relative_performance":
             days=[b['date'] for b in old['raw'] if b['date']<=str(event['session_date'])][-minimum_bars(event['kind'],event['payload']['params']):]
             if days and any(days[0]<=day<=str(event['session_date']) for day in changed_days):
-                conn.execute("UPDATE alert_events SET correction=%s WHERE id=%s",(json_value({
-                    'instrumentId':str(instrument_id),'previousHash':fingerprint(old),'newHash':new_hash,
+                corrections.append(({
+                    'instrumentId':str(instrument_id),'previousHash':old_hash,'newHash':new_hash,
                     'reason':'상대성과 계산에 사용된 가격 자료가 정정되었습니다. 자동 재발송하지 않습니다.',
-                    'result':{'status':'needs_review','triggers':[]}}),event['id']))
+                    'result':{'status':'needs_review','triggers':[]}},event['id']))
             continue
         before=event["payload"]["result"].get("stateBefore")
-        result = evaluate_rule(event["kind"], event["payload"]["params"], adjusted_bars(snapshot, event["session_date"].isoformat()),state=before)
+        key=fingerprint([event['kind'],event['payload']['params'],event['session_date'].isoformat(),before])
+        if key not in results:
+            results[key]=evaluate_rule(event['kind'],event['payload']['params'],adjusted_bars(snapshot,event['session_date'].isoformat()),state=before)
+        result=results[key]
         if event["kind"] == "retest" and before:
             if any(before["date"]<=day<=event["session_date"].isoformat() for day in changed_days):
                 result={"status":"needs_review","triggers":[],"reason":"돌파 이후 순서 자료 정정으로 재확인 필요"}
         if result != event["payload"]["result"]:
             correction = {"previousHash": event["snapshot_hash"], "newHash": new_hash,
                           "reason": "공급자 과거 자료 정정으로 당시 판정이 달라졌습니다. 자동 재발송하지 않습니다.", "result": result}
-            conn.execute("UPDATE alert_events SET correction=%s WHERE id=%s AND correction IS DISTINCT FROM %s", (json_value(correction), event["id"], json_value(correction)))
+            corrections.append((correction,event['id']))
+    with conn.cursor() as cur:
+        cur.executemany('UPDATE alert_events SET correction=%s WHERE id=%s AND correction IS DISTINCT FROM %s',
+            [(json_value(value),identity,json_value(value)) for value,identity in corrections])
 
 
 def evaluation_bars(rule, snapshot, reference, day):
@@ -317,7 +326,8 @@ def prepare_digests(run, token, now, started):
             existing = conn.execute("SELECT * FROM alert_digests WHERE user_id=%s AND digest_date=%s AND kind<>'test' AND channel=%s", (user["id"], run["digest_date"],channel)).fetchone()
             devices=conn.execute('SELECT id FROM alert_push_subscriptions WHERE user_id=%s',(user['id'],)).fetchall() if not email else []
             holding_rules=conn.execute('SELECT id FROM alert_rules WHERE user_id=%s AND enabled AND NOT archived AND kind=ANY(%s) LIMIT 1',(user['id'],list(HOLDING_TYPES))).fetchone()
-        if pending or existing or (not email and not devices):
+        rebuild=existing and existing['status']=='canceled' and existing['attempts']==0 and existing['kind']==frequency
+        if pending or (existing and not rebuild) or (not email and not devices):
             continue
         try:
             legacy = legacy_section(user) if email else None
@@ -333,6 +343,9 @@ def prepare_digests(run, token, now, started):
             current = conn.execute("SELECT * FROM alert_users WHERE id=%s FOR UPDATE", (user["id"],)).fetchone()
             if not current or (email and (not current["consent"] or current["suppressed"] or current["email"] != user["email"] or current['email_frequency']!=frequency)) or (not email and (not current['push_consent'] or current['push_version']!=user['push_version'])):
                 continue
+            if rebuild:
+                latest=conn.execute('SELECT status,attempts FROM alert_digests WHERE id=%s FOR UPDATE',(existing['id'],)).fetchone()
+                if not latest or latest['status']!='canceled' or latest['attempts']!=0:continue
             period_filter='e.created_at >= %s' if frequency=='weekly' else 'e.session_date >= %s'
             period_start=run['cutoff']-timedelta(days=7) if frequency=='weekly' else run['digest_date']-timedelta(days=14)
             events = conn.execute(f"""SELECT e.*,i.metadata FROM alert_events e JOIN alert_rules r ON r.id=e.rule_id
@@ -354,12 +367,13 @@ def prepare_digests(run, token, now, started):
                        "rules": {str(e["rule_id"]): e["meaning_version"] for e in events}, "envelope": envelope,
                        "deferred": deferred,'frequency':frequency}
             if any(e['payload'].get('kind') in HOLDING_TYPES for e in events):payload['portfolioFingerprint']=portfolio_hash
-            identity=uuid4()
+            identity=existing['id'] if rebuild else uuid4()
             conn.execute("""INSERT INTO alert_digests(id,user_id,digest_date,kind,channel,payload,status) VALUES(%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT(user_id,digest_date,kind,channel) DO UPDATE SET payload=EXCLUDED.payload,status=EXCLUDED.status
+                ON CONFLICT(user_id,digest_date,kind,channel) DO UPDATE SET payload=EXCLUDED.payload,status=EXCLUDED.status,error=NULL
                 WHERE alert_digests.attempts=0""", (identity, user["id"], run["digest_date"],frequency,channel, json_value(payload),
                                                     "pending" if envelope else "deferred" if deferred else "no_signals"))
             if not email and envelope:
+                if rebuild:conn.execute('DELETE FROM alert_push_deliveries WHERE digest_id=%s',(identity,))
                 for device in devices:conn.execute('INSERT INTO alert_push_deliveries(digest_id,subscription_id) VALUES(%s,%s)',(identity,device['id']))
 
 
@@ -412,6 +426,8 @@ def send_digest(identity, run=None, token=None, *, deadline=None):
     # Original envelope and id remain unchanged across timeouts/retries.
     outcome = alert_push.send_devices(identity,deadline=deadline) if push else send_payload(identity, payload["envelope"])
     state, provider_id = outcome[:2]
+    if not push and row['status'] in ('unknown','sending') and state in ('retryable_failed','permanent_failed'):
+        state='unknown'  # A later rejection cannot disprove acceptance of the earlier attempt.
     retry_after = outcome[2] if len(outcome) > 2 else 300
     with database() as conn:
         if run:

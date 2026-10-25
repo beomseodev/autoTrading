@@ -27,8 +27,8 @@ function describeRule(kind,p) {
 }
 function describeValues(values={},kind='',params={},currency='현지 통화') {
   values={...values};
-  if(kind==='daily_change')values.threshold=params.thresholdPct;
-  if(kind==='range_breakout')delete values.threshold;
+  if(kind==='daily_change'){values.threshold=params.thresholdPct;delete values.previousThreshold;}
+  if(kind==='range_breakout'){delete values.threshold;delete values.previousThreshold;}
   const unit=kind==='relative_performance'?'%p':['daily_change','drawdown_cross','holding_return','holding_weight'].includes(kind)?'%':kind==='volume_spike'?'주':kind==='rsi_cross'?'':kind?' '+currency:'';
   const labels={previousValue:'전일 값',value:'당일 값',previousThreshold:'전일 기준',threshold:'기준',close:'종가 (현지 통화)',previousHigh:'직전 최고 종가',previousLow:'직전 최저 종가'};
   if(['holding_return','holding_weight'].includes(kind))Object.assign(labels,{previousValue:'직전 평가 값',value:'현재 평가 값'});

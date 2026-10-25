@@ -44,7 +44,7 @@ def unsubscribe(token, *, apply=False):
 def make_payload(user, day, events, deferred=0, legacy=None, test=False,frequency='daily'):
     base = os.environ["APP_BASE_URL"].rstrip("/")
     link = base + "/notifications/unsubscribe/" + unsubscribe_token(user)
-    lines = ["종가 기준 관심종목 알림", "한국시간 발송일: " + str(day), ""]
+    lines = ["관심종목 알림 · 가격 조건은 정규장 종가 기준", "한국시간 발송일: " + str(day), ""]
     if frequency=='weekly':lines.extend(['주간 요약 · 최근 7일 동안 확인한 새 신호 · 보류 수는 이번 점검 기준',''])
     for event in events:
         payload = event["payload"]
@@ -52,7 +52,7 @@ def make_payload(user, day, events, deferred=0, legacy=None, test=False,frequenc
             info=payload['information']
             lines.extend([f"{payload['symbol']} · {payload['label']} · {info['title']}",info['details'],'출처: '+info['sourceUrl'],''])
             continue
-        direction = {"up": "상향", "down": "하향", "volume": "거래량 급증", "drawdown": "낙폭 진입"}.get(event["trigger_kind"], event["trigger_kind"])
+        direction = {"up": "상향", "down": "하향", "volume": "거래량 급증", "drawdown": "낙폭 진입",'all':'같은 거래일의 모든 조건 충족','retest':'고정 가격 재접근'}.get(event["trigger_kind"], event["trigger_kind"])
         if payload.get('kind') in ('holding_return','holding_weight'):
             p,v=payload['params'],payload['result']['values']
             lines.extend([f"{payload['symbol']} · {event['session_date']} 점검 · {payload['label']}",
@@ -68,11 +68,11 @@ def make_payload(user, day, events, deferred=0, legacy=None, test=False,frequenc
                 ('지연 확인' if payload.get('delayed') else ''),''])
             continue
         lines.extend([("지연 확인: " if payload.get("delayed") else "") + f"{payload['symbol']} · {event['session_date']} 종가 · {payload['currency']}",
-                      payload["label"] + " · " + direction, json_values(payload["result"]["values"]),
-                      "조건: " + str(payload["params"]), ""])
+                      payload["label"] + " · " + direction, readable_values(payload["result"]["values"],payload.get('kind',''),payload['params'],payload['currency']),
+                      "조건: " + readable_params(payload["params"]), ""])
         for child in payload["result"].get("conditions",[]):
             from app.alert_rules import LABELS
-            lines.append(LABELS[child["type"]]+": "+child["result"]["reason"]+" · "+json_values(child["result"]["values"]))
+            lines.append(LABELS[child["type"]]+" · "+readable_values(child["result"]["values"],child['type'],child['params'],payload['currency']))
     if legacy:
         lines.extend(["리밸런싱 점검", legacy, ""])
     if deferred:
@@ -83,13 +83,37 @@ def make_payload(user, day, events, deferred=0, legacy=None, test=False,frequenc
                   "해지 전에 이미 접수된 메일은 한 통 도착할 수 있습니다."])
     text = "\n".join(lines)
     return {"from": os.environ["ALERT_EMAIL_FROM"], "to": [user["email"]],
-            "subject": ("[종가 알림] 메일 연결 테스트" if test else f"[{'주간 요약' if frequency=='weekly' else '종가 알림'}] {day} · {len({e['payload']['symbol'] for e in events})}종목 {len(events)}신호"),
+            "subject": ("[관심종목 알림] 메일 연결 테스트" if test else f"[{'주간 요약' if frequency=='weekly' else '관심종목 알림'}] {day} · {len({e['payload']['symbol'] for e in events})}종목 {len(events)}신호"),
             "text": text, "html": "<div style='white-space:pre-wrap'>" + escape(text) + "</div>",
             "headers": {"List-Unsubscribe": "<" + link + ">", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"}}
 
 
-def json_values(values):
-    return " · ".join(f"{key}: {value:.6g}" for key, value in values.items())
+def readable_params(params):
+    from app.alert_rules import LABELS
+    labels={'average':'평균 방식','period':'기간','direction':'방향','shortPeriod':'단기','longPeriod':'장기',
+        'price':'지정가격','thresholdPct':'변동 기준','level':'RSI 기준','multiple':'거래량 배수','fastPeriod':'MACD 단기',
+        'slowPeriod':'MACD 장기','signalPeriod':'시그널 기간','crossMode':'MACD 비교선','stddev':'표준편차 배수',
+        'event':'발동 조건','windowSessions':'대기 기간','tolerancePct':'재접근 허용폭'}
+    options={'sma':'단순이동평균 SMA','ema':'지수이동평균 EMA','both':'양방향','up':'상향','down':'하향',
+        'signal':'시그널선','zero':'0선','upper_exit':'상단 위 돌파','lower_exit':'하단 아래 이탈','upper_reentry':'상단 아래 복귀','lower_reentry':'하단 위 복귀'}
+    parts=[]
+    for key,value in params.items():
+        if key=='conditions':parts.append('같은 거래일에 모두 충족: '+' 그리고 '.join(LABELS[c['type']]+' ('+readable_params(c['params'])+')' for c in value))
+        elif key=='trigger':parts.append('돌파 기준: '+LABELS[value['type']]+' ('+readable_params(value['params'])+')')
+        elif key in labels:
+            suffix='거래일' if key.lower().endswith('period') or key=='windowSessions' else '%' if key.endswith('Pct') else '배' if key in ('multiple','stddev') else ''
+            parts.append(labels[key]+': '+(options.get(value,value) if isinstance(value,str) else f'{value:g}')+suffix)
+    return ' · '.join(parts)
+
+
+def readable_values(values,kind,params,currency):
+    values=dict(values)
+    if kind=='daily_change':values['threshold']=params['thresholdPct'];values.pop('previousThreshold',None)
+    if kind=='range_breakout':values.pop('threshold',None);values.pop('previousThreshold',None)
+    labels={'previousValue':'전일 값','value':'당일 값','previousThreshold':'전일 기준','threshold':'기준',
+        'close':'종가','previousHigh':'직전 최고 종가','previousLow':'직전 최저 종가'}
+    unit='%' if kind in ('daily_change','drawdown_cross') else '주' if kind=='volume_spike' else '' if kind=='rsi_cross' else ' '+currency
+    return ' · '.join(f"{labels[key]}: {value:.6g}{' '+currency if key in ('close','previousHigh','previousLow') else unit}" for key,value in values.items() if key in labels)
 
 
 def send_payload(identity, payload):

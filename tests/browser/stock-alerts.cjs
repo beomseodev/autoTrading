@@ -58,12 +58,20 @@ const server = http.createServer((req,res)=>{
     await until("!document.getElementById('content').hidden && document.getElementById('loading').hidden");
     assert.equal(await run("document.getElementById('kind').options.length"),fixture.types.length);
     assert.equal(await run('permissionRequests'),0,'Page load must not request permission');
+    assert(await run("document.getElementById('delivery-note').textContent.includes('판정 이력이 갱신되지 않습니다')"));
     await run("document.getElementById('push-connect').click()");
     await until("document.getElementById('status').textContent.includes('허용하지 않았습니다')");
     assert.equal(await run('pushDevices.length'),0);
     await run("permissionResult='granted';document.getElementById('push-frequency').value='weekly';document.getElementById('push-connect').click()");
     await until("document.getElementById('status').textContent.includes('브라우저를 연결') && document.getElementById('loading').hidden");
     assert(await run("preferences.pushConsent && preferences.pushFrequency==='weekly' && document.getElementById('push-devices').textContent.includes('이 브라우저')"));
+    assert(await run("document.getElementById('push-status').textContent.includes('운영 중지')"));
+    await run("preferences.sendingEnabled=true;document.getElementById('refresh').click()");
+    await until("document.getElementById('loading').hidden");
+    assert(await run("document.getElementById('delivery-note').textContent.includes('활성화') && document.getElementById('push-status').textContent.includes('수신이 켜져')"));
+    await run("preferences.sendingEnabled=false;document.getElementById('refresh').click()");
+    await until("document.getElementById('loading').hidden");
+    assert(await run("document.getElementById('delivery-note').textContent.includes('판정 이력이 갱신되지 않습니다') && document.getElementById('push-status').textContent.includes('운영 중지')"));
     await run("localSubscription.options.applicationServerKey=new Uint8Array([1,2,3]);document.getElementById('status').textContent='';document.getElementById('push-connect').click()");
     await until("document.getElementById('status').textContent.includes('브라우저를 연결') && document.getElementById('loading').hidden");
     assert.equal(await run('subscriptionCount'),2,'Reconnect after server key rotation must replace the browser subscription');
@@ -108,6 +116,7 @@ const server = http.createServer((req,res)=>{
     await run("document.getElementById('rule-form').requestSubmit()");
     await until("rules.length===1 && document.getElementById('loading').hidden");
     assert.equal(await run("rules[0].params.conditions.length"),2);
+    assert(await run("document.getElementById('rules').textContent.includes('운영 중지 · 활성화 후 다음 점검부터 평가합니다')"));
     await run("document.querySelectorAll('#rules button')[2].click()");
     await until("rules.length===0 && document.getElementById('loading').hidden");
     await run("document.getElementById('kind').value='retest';document.getElementById('kind').dispatchEvent(new Event('change'));document.getElementById('rule-form').requestSubmit()");
@@ -130,6 +139,11 @@ const server = http.createServer((req,res)=>{
     await run("document.getElementById('param-useSavedPortfolio').checked=true;document.getElementById('rule-form').requestSubmit()");
     await until("rules.length===1 && document.getElementById('loading').hidden");
     assert.equal(await run("rules[0].params.useSavedPortfolio"),true);
+    for(const [reason,expected] of [['average_cost_missing','평균 매입가를 입력'],['holding_removed','내역을 확인'],['fx_pending','환율 자료 준비 중']]){
+      await run(`rules[0].last_result={status:'deferred',reason:${JSON.stringify(reason)}};document.getElementById('refresh').click()`);
+      await until("document.getElementById('loading').hidden");
+      const text=await run("document.getElementById('rules').textContent");assert(text.includes(expected)&&!text.includes(reason));
+    }
     await run("document.querySelectorAll('#rules button')[2].click()");
     await until("rules.length===0 && document.getElementById('loading').hidden");
     await run("document.getElementById('kind').value='dividend_event';document.getElementById('kind').dispatchEvent(new Event('change'));document.getElementById('param-dateField').value='payDate';document.getElementById('rule-form').requestSubmit()");

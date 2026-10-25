@@ -59,7 +59,7 @@ def test_and_api_dedup_delivery_and_split_guard(db,monkeypatch,split):
         assert not updated['enabled'] and updated['last_result']['status']=='needs_review'
         return
     assert len(rows)==1 and rows[0]['trigger_kind']=='all'
-    assert len(sent)==1 and 'volume_spike' in sent[0]['text']
+    assert len(sent)==1 and '거래량 급증' in sent[0]['text'] and 'volume_spike' not in sent[0]['text']
 
 
 def test_price_subcondition_requires_split_review():

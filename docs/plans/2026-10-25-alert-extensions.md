@@ -14,7 +14,7 @@
 | 7 | 한국·미국 공시 | 완료, 네 역할 검토·수정 후 팀장 승인 |
 | 8 | 채널별 일간·주간 | 완료, 네 역할 재검토 통과 (푸시 채널은 기능9에서 연결) |
 | 9 | 웹 푸시 | 완료, 네 역할 재검토 통과 |
-| 최종 | 전체 회귀·부하·실사용자 흐름 리뷰 | 진행 중 |
+| 최종 | 전체 회귀·부하·실사용자 흐름 리뷰 | 완료, 네 역할 참여·필수 지적 수정 및 재확인 |
 
 현재 명세 근거는 2026-10-23-stock-alerts.md와 최신 구현·복구 검토 문서다. 기존 10종 수식, API 생명주기, 거래소 달력, 계정 분리, 저장 복구는 기존 구현·테스트를 재사용한다. 기본 검사: Python 251 통과/21 건너뜀, Node 38 통과. 건너뛴 DB·부하 검사는 격리 PostgreSQL에서 수행한다.
 
@@ -77,3 +77,11 @@ Latest full Python: 372 passed / one opt-in load skipped; related cadence/jobs/A
 All four Orca roles independently reviewed and followed up, clearing required changes. No roles were missing or providers substituted; all feature workers were released and deliveries acknowledged. Reports: `.team-review/extensions-f9-*-followup.md`. Adopted findings: same-value settings preserve pending deliveries; reconnect reconciles lost POST responses and settings conflicts before replacing subscriptions; expired/canceled device states finalize with accepted evidence preserved; terminal push unknown digests leave the Cron candidate set while email idempotent retries remain.
 
 Initial failures preceded implementation. Real pywebpush encryption was decrypted locally to verify its generic payload, timeout and redirect behavior. Before review fixes, full Python 387 passed / one opt-in load skipped, Node 43 passed. After fixes, push/jobs/cadence 41 passed, including 20 push tests. Chrome covers explicit permission/denial, independent weekly settings, key replacement, unsubscribe, lost subscription responses and failed settings followed by retry without duplicate subscriptions. The follow-up recommendation to model changing server revisions was added to the browser fixture. Browser push services and Notification/PushManager are mocked; actual browser-provider delivery and iOS installation remain operational checks. Final mixed-load and whole-product user-flow review follow this feature gate.
+
+## 최종 전체 기능 검증과 팀 판단
+
+전체 제품의 사용자 흐름을 실제 Orca 네 역할이 검토했다. 누락·공급자 대체 없음. 비판 역할의 불명 전송 이후 실패 응답 상태 보존, 무시도 주간 묶음에서 남은 신호 복구와 외부인 역할의 운영 OFF 범위·보유자산 오류 행동 안내를 채택했다. 실패 테스트를 먼저 확인한 뒤 수정했고 두 역할의 각 1회 후속 검토에서 필수 지적 해소를 확인했다. 가능성·확장성 역할은 새 필수 코드 수정 없이 부하 결과의 적용 범위와 운영 조건을 명시하도록 권고했다. 모든 최종 작업자는 회수하고 완료 메시지를 확인 처리했다. 상세는 [최종 사용자 흐름 검토](../reviews/2026-10-25-alert-extensions-final.md).
+
+최신 전체 Python **400 통과 / opt-in 부하 3개 제외**, Node **43 통과**, 실제 headless Chrome의 알림·대시보드·로딩/실험실 **3종 통과**. 별도 부하는 기존 5,000개 가격 규칙 검사 1개와 최종 혼합·누적 검사 2개 모두 통과했다. 최종 혼합/누적 두 검사는 133.11초에 완료했다. 혼합은 50사용자·950규칙·100종목·양 채널·250푸시기기, 삭제 자료 종류별 9,000건, 모의 지연/429를 포함해 재개 7회·최대 호출 183.12초였다. 400일 발송 이력/18,000이벤트의 주간 후보 700개 중 기발송 1개를 제외했고 준비 2.47초·정정 1.13초·400개 배당자료 50회 비교 1.42초를 측정했다. 정정은 처음 약 18초 성능 실패를 재현한 뒤 계산 재사용과 일괄 DB 갱신으로 개선했다.
+
+이 결과는 실제 외부 사용자 조사나 운영 공급자·전달 검증이 아니다. 5,000 가격 규칙과 950 혼합 규칙은 다른 구성이고 700개는 전체 사건 상한이 아니다. 장기 완료 task 정리·실제 계약 quota·냉간 캐시·실기기 전달 등 미측정 범위를 최종 검토에 기록했다. Git 원격 푸시·배포·실제 발송은 수행하지 않았다.

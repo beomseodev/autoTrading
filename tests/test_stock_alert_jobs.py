@@ -240,3 +240,24 @@ def test_next_day_releases_only_definite_nonacceptance(db, monkeypatch, first_st
         row=conn.execute("SELECT * FROM alert_digests WHERE digest_date=%s",(run["digest_date"],)).fetchone()
         assert row["status"]==expected
         assert len(row["payload"]["eventIds"])==(1 if first_state=="retryable_failed" else 0)
+
+
+@pytest.mark.parametrize('first_state',['unknown','sending'])
+@pytest.mark.parametrize('later_state',['retryable_failed','permanent_failed'])
+def test_prior_uncertain_acceptance_survives_later_rejection(db,monkeypatch,first_state,later_state):
+    import time
+    prepare(monkeypatch)
+    monkeypatch.setattr(jobs,'send_payload',lambda *_:('unknown',None))
+    jobs.process_alert_run(now=NOW)
+    with database() as conn:
+        row=conn.execute('UPDATE alert_digests SET status=%s RETURNING id',(first_state,)).fetchone()
+    monkeypatch.setattr(jobs,'send_payload',lambda *_:(later_state,None))
+    jobs.send_digest(row['id'])
+    with database() as conn:
+        assert conn.execute('SELECT status FROM alert_digests WHERE id=%s',(row['id'],)).fetchone()['status']=='unknown'
+    later=NOW+timedelta(days=1);monkeypatch.setattr(jobs,'utcnow',lambda:later)
+    run,token=jobs.initialize(later)
+    with database() as conn:conn.execute("UPDATE alert_tasks SET status='done' WHERE run_id=%s",(run['id'],))
+    jobs.prepare_digests(run,token,later,time.monotonic())
+    with database() as conn:
+        assert conn.execute('SELECT payload FROM alert_digests WHERE digest_date=%s',(run['digest_date'],)).fetchone()['payload']['eventIds']==[]

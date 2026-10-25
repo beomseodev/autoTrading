@@ -10,6 +10,32 @@ names.useSavedPortfolio='이 계정에 저장된 보유자산을 연결합니다
 names.daysBefore='일정 며칠 전 (달력일)';names.dateField='배당 알림 기준일';
 options.dateField=[['exDate','배당락일'],['payDate','지급일']];
 const reasons={calendar_not_configured:'일정 공급자 연결이 설정되지 않았습니다.',calendar_quota_not_configured:'일정 공급자 조회 한도가 설정되지 않았습니다.',calendar_unavailable:'일정 공급자 조회 실패',calendar_unsupported:'지원하지 않는 종목·일정입니다.',calendar_snapshot_pending:'일정 자료 준비 중',invalid_calendar_data:'일정 자료 형식 검증 실패',invalid_calendar_response:'일정 응답 검증 실패',invalid_calendar_removal:'일정 취소 자료 검증 실패'};
+Object.assign(reasons,{
+  saved_portfolio_missing:'이 계정에 저장된 보유자산이 없습니다. 대시보드에서 보유 내역을 계정에 저장해주세요.',
+  duplicate_saved_symbol:'저장 보유자산에 같은 종목이 중복되었습니다. 대시보드에서 내역을 확인해주세요.',
+  portfolio_not_connected:'이 조건에서 저장 보유자산 연결을 선택해주세요.',
+  holding_removed:'저장 보유자산에 이 종목이 없습니다. 대시보드 내역을 확인하거나 해당 규칙을 정지해주세요.',
+  average_cost_missing:'대시보드에서 이 종목의 평균 매입가를 입력하고 계정에 저장해주세요.',
+  portfolio_pending:'저장 보유자산 확인 중입니다. 다음 점검에서 다시 확인합니다.',
+  portfolio_prices_pending:'보유종목 가격 자료 준비 중입니다. 다음 점검에서 다시 확인합니다.',
+  portfolio_prices_unavailable:'보유종목 가격 조회에 실패했습니다. 신호 여부는 확인하지 못했습니다.',
+  portfolio_prices_stale:'보유종목 가격의 기준일이 오래되어 보류했습니다. 최신 자료를 기다립니다.',
+  invalid_portfolio_price:'보유종목 가격 검증에 실패했습니다. 신호 여부는 확인하지 못했습니다.',
+  invalid_portfolio_value:'보유자산 평가액을 계산할 수 없습니다. 수량·평균 매입가·현금 내역을 확인해주세요.',
+  fx_pending:'환율 자료 준비 중입니다. 다음 점검에서 다시 확인합니다.',
+  fx_stale:'환율 기준일이 오래되어 보류했습니다. 최신 자료를 기다립니다.',
+  invalid_fx_data:'환율 자료 검증에 실패했습니다. 다음 점검에서 다시 확인합니다.',
+  provider_quota_not_configured:'시세 공급자 조회 한도가 설정되지 않았습니다.',
+  provider_rate_limited:'공급자 조회 한도에 도달해 재시도를 기다립니다.',
+  provider_unavailable:'시세 공급자 조회에 실패했습니다. 다음 점검에서 다시 확인합니다.',
+  provider_rejected:'시세 공급자가 조회를 거절했습니다. 운영자의 연결 확인이 필요합니다.',
+  invalid_provider_data:'시세 자료 검증에 실패했습니다. 신호 여부는 확인하지 못했습니다.',
+  metadata_mismatch:'종목의 시장·통화 정보가 달라 보류했습니다. 종목 정보를 확인해주세요.',
+  confirmed_suspension:'거래정지가 확인되어 판정을 보류했습니다.',
+  latest_bar_pending:'최신 종가 자료 준비 중입니다. 다음 점검에서 다시 확인합니다.',
+  data_gap:'필요한 거래일의 시세가 누락되어 판정을 보류했습니다.',
+  history_anchor_changed:'과거 시세가 변경되어 재확인이 필요합니다.'
+});
 Object.assign(reasons,{sec_not_configured:'SEC 조회 연락처 설정·접근 권한 확인이 필요합니다.',dart_not_configured:'DART API 키·접근 권한 확인이 필요합니다.',filing_unsupported:'지원되는 공시 회사 식별자를 찾지 못했습니다.',filing_unavailable:'공시 조회 실패',filing_snapshot_pending:'공시 자료 준비 중',invalid_filing_data:'공시 자료 검증 실패',invalid_filing_response:'공시 응답 검증 실패',invalid_filing_mapping:'공시 회사 식별자 검증 실패'});
 const statuses = {signal:'새 신호',no_signal:'정상 무신호',no_new_session:'휴장 또는 활성화 후 새 거래일 없음',insufficient_data:'계산 자료 부족',invalid_data:'자료 검증 실패',needs_review:'조건 재확인 필요',pending:'발송 대기',sending:'전송 중',accepted:'공급자 접수',delivered:'배달 확인',no_signals:'새 신호 없음',unknown:'결과 확인 필요',retryable_failed:'발송 재시도 대기',permanent_failed:'발송 실패',canceled:'설정 변경으로 취소',bounced:'반송',complained:'스팸신고',suppressed:'발송 중지'};
 statuses.deferred='조회 실패·자료 보류, 신호 여부 미확인';
@@ -91,7 +117,7 @@ function render(){
   });
   $('rules').replaceChildren();
   if(!state.rules.length)$('rules').append(element('li','등록한 규칙이 없습니다.'));
-  state.rules.forEach(r=>{const li=element('li'),detail=element('div',`${r.symbol} · ${r.name||state.settings.types.find(x=>x.type===r.kind).label}`,'detail');detail.append(element('small',describeRule(r.kind,r.params)),element('small',describeState(r)),element('small',r.enabled?'활성':'정지'),element('small','마지막 정상 평가일: '+(r.last_session||'없음')),element('small',r.last_result?(statuses[r.last_result.status]||r.last_result.status)+' · '+(reasons[r.last_result.reason]||r.last_result.reason||''):'자료 준비 중 · 다음 점검부터 평가합니다.'));li.append(detail,button(r.enabled?'정지':'재개',async()=>{await api('/api/alerts/rules/'+r.id,'PATCH',{revision:r.revision,enabled:!r.enabled});await refresh();}),button('수정',async()=>{state.edit=r;$('kind').value=r.kind;$('kind').disabled=true;$('rule-name').value=r.name;fields(r.params);$('cancel-edit').hidden=false;$('save-rule').textContent='조건 수정 저장';$('rule-heading').textContent=r.symbol+' 조건 수정';$('rule-heading').scrollIntoView({block:'center'});$('rule-name').focus();}),button('삭제',async()=>{await api('/api/alerts/rules/'+r.id,'DELETE');await refresh();}));$('rules').append(li);});
+  state.rules.forEach(r=>{const li=element('li'),detail=element('div',`${r.symbol} · ${r.name||state.settings.types.find(x=>x.type===r.kind).label}`,'detail');detail.append(element('small',describeRule(r.kind,r.params)),element('small',describeState(r)),element('small',r.enabled?'활성':'정지'),element('small','마지막 정상 평가일: '+(r.last_session||'없음')),element('small',r.last_result?(statuses[r.last_result.status]||r.last_result.status)+' · '+(reasons[r.last_result.reason]||r.last_result.reason||''):(state.settings.sendingEnabled?'자료 준비 중 · 다음 점검부터 평가합니다.':'운영 중지 · 활성화 후 다음 점검부터 평가합니다.')));li.append(detail,button(r.enabled?'정지':'재개',async()=>{await api('/api/alerts/rules/'+r.id,'PATCH',{revision:r.revision,enabled:!r.enabled});await refresh();}),button('수정',async()=>{state.edit=r;$('kind').value=r.kind;$('kind').disabled=true;$('rule-name').value=r.name;fields(r.params);$('cancel-edit').hidden=false;$('save-rule').textContent='조건 수정 저장';$('rule-heading').textContent=r.symbol+' 조건 수정';$('rule-heading').scrollIntoView({block:'center'});$('rule-name').focus();}),button('삭제',async()=>{await api('/api/alerts/rules/'+r.id,'DELETE');await refresh();}));$('rules').append(li);});
 }
 async function history(kind,append=false) {
   const result=await api('/api/alerts/'+kind+(append&&state[kind]?'?cursor='+encodeURIComponent(state[kind]):''));
@@ -136,7 +162,8 @@ async function refresh() {
   $('consent').checked=settings.consent;
   $('email-frequency').value=settings.emailFrequency||'daily';
   $('frequency-note').textContent=settings.emailFrequency==='weekly'?'주간 요약 · 매주 월요일 한국시간 오전 8시대 · 최근 7일 새 신호가 있을 때 한 통':'일간 요약 · 한국시간 오전 8시대 · 새 신호가 있는 날 한 통';
-  $('delivery-note').textContent=settings.suppressed?'발송 중지: '+settings.suppressed:settings.sendingEnabled?'운영 발송이 활성화되어 있습니다.':'실제 메일 발송은 아직 꺼져 있습니다. 조건을 저장할 수 있습니다.';
+  $('delivery-note').textContent=settings.sendingEnabled?'운영 점검과 발송이 활성화되어 있습니다.':'운영 점검과 이메일·웹 푸시 발송이 중지되어 판정 이력이 갱신되지 않습니다. 설정은 저장할 수 있습니다.';
+  if(settings.suppressed)$('delivery-note').textContent+=' 이메일 발송 중지: '+(statuses[settings.suppressed]||settings.suppressed)+'.';
   if(!settings.calendarConfigured)$('delivery-note').textContent+=' 실적·배당 일정 공급자 연결은 설정되지 않았습니다.';
   if(!settings.filingsConfigured?.sec||!settings.filingsConfigured?.dart)$('delivery-note').textContent+=' 공시 연결: SEC '+(settings.filingsConfigured?.sec?'설정됨':'미설정')+', DART '+(settings.filingsConfigured?.dart?'설정됨':'미설정')+'.';
   if(first) {
@@ -149,7 +176,8 @@ async function refresh() {
 function pushSupported(){return window.isSecureContext&&'serviceWorker' in navigator&&'PushManager' in window&&'Notification' in window;}
 async function renderPush(){
   $('push-consent').checked=Boolean(state.settings.pushConsent);$('push-frequency').value=state.settings.pushFrequency||'daily';
-  $('push-status').textContent=!state.settings.pushConfigured?'웹 푸시 서버 연결이 아직 설정되지 않았습니다.':!pushSupported()?'이 브라우저 환경에서는 웹 푸시를 지원하지 않습니다.':Notification.permission==='denied'?'브라우저 알림이 차단되었습니다. 사이트 권한에서 허용한 후 다시 연결해주세요.':state.settings.pushConsent?'연결한 브라우저의 푸시 수신이 켜져 있습니다.':'웹 푸시 수신이 꺼져 있습니다.';
+  $('push-status').textContent=!state.settings.pushConfigured?'웹 푸시 서버 연결이 아직 설정되지 않았습니다.':!pushSupported()?'이 브라우저 환경에서는 웹 푸시를 지원하지 않습니다.':Notification.permission==='denied'?'브라우저 알림이 차단되었습니다. 사이트 권한에서 허용한 후 다시 연결해주세요.':state.settings.pushConsent?(state.settings.sendingEnabled?'연결한 브라우저의 푸시 수신이 켜져 있습니다.':'푸시 수신 동의는 저장되어 있습니다. 운영 활성화 후 수신합니다.'):'웹 푸시 수신이 꺼져 있습니다.';
+  if(!state.settings.sendingEnabled)$('push-status').textContent='운영 중지로 웹 푸시가 발송되지 않습니다. '+$('push-status').textContent;
   const result=await api('/api/alerts/push/subscriptions');
   let local=null;
   if(pushSupported()){const registration=await navigator.serviceWorker.getRegistration('/alerts');local=registration?await registration.pushManager.getSubscription():null;}
@@ -203,7 +231,7 @@ async function operations() {
     if(!result.runs.length)$('operations-status').textContent='아직 점검 실행 기록이 없습니다.';
     result.runs.forEach(run=>{
       const li=element('li'),detail=element('div',run.digest_date,'detail');
-      const taskNames={fetch:'자료 조회',evaluate:'규칙 평가'},taskStatuses={done:'완료',pending:'대기',deferred:'보류'};
+      const taskNames={fetch:'자료 조회',evaluate:'규칙 평가',fetch_earnings:'실적 일정 조회',fetch_dividends:'배당 일정 조회',fetch_removed_earnings:'실적 일정 취소 조회',fetch_removed_dividends:'배당 일정 취소 조회',fetch_filing_map:'공시 회사 식별자 조회',fetch_filing:'공시 조회'},taskStatuses={done:'완료',pending:'대기',deferred:'보류'};
       detail.append(element('small',run.tasks.map(t=>`${taskNames[t.kind]||t.kind} ${taskStatuses[t.status]||t.status}: ${t.count}건`).join(' · ')||'작업 없음'));
       detail.append(element('small',run.deliveries.map(d=>`${d.channel==='push'?'웹 푸시 · ':''}${statuses[d.status]||d.status}: ${d.count}건`).join(' · ')||'발송 기록 없음'));
       detail.append(element('small',`누적 처리 ${Number(run.duration_seconds).toFixed(1)}초 · 시세 요청 ${run.data_calls||0}회 / HTTP 429 ${run.data_429||0}회 · 메일 요청 ${run.email_calls||0}회 / HTTP 429 ${run.email_429||0}회`));
