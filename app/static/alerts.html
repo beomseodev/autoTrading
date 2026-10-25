@@ -20,9 +20,13 @@
         <button id="email-test" class="button quiet">본인에게 테스트 메일</button>
       </section>
       <section class="card"><h2>관심종목</h2><p>미국은 SCHD, TQQQ, QQQI · 한국은 005930.KS, 247540.KQ 형식으로 입력하세요.</p>
-        <form id="watch-form"><label for="symbol">종목 코드·이름 검색</label><input id="symbol" list="symbol-results" maxlength="80" placeholder="SCHD 또는 종목명" required autocomplete="off"><datalist id="symbol-results"></datalist><button class="button primary">관심종목 추가</button></form>
+        <form id="watch-form"><label for="symbol">종목 코드·이름 검색</label><input id="symbol" list="symbol-results" maxlength="80" placeholder="SCHD 또는 종목명" required autocomplete="off"><datalist id="symbol-results"></datalist><button class="button primary">종목 확인</button></form>
+        <div id="watch-preview" hidden><p id="watch-preview-detail" role="status"></p><button id="confirm-watch" class="button primary" type="button">확인한 종목 추가</button></div>
         <button id="import-holdings" class="button quiet">보유 종목 가져오기</button><p class="card-note">아래에서 종목을 선택하면 같은 규칙을 일괄 등록할 수 있습니다. 가져와도 기존 자산은 변경되지 않습니다.</p>
+        <form id="holdings-form" hidden><fieldset><legend>가져올 보유 종목 선택</legend><div id="holdings-options"></div></fieldset><button class="button primary">선택한 보유 종목 추가</button><button id="cancel-import" class="button quiet" type="button">가져오기 닫기</button></form>
         <ul id="watchlist" class="alert-list"></ul>
+        <p class="card-note">제거하면 연결 규칙도 중지·보관됩니다. 종목을 다시 추가해도 규칙은 자동 복원되지 않습니다. 복원하려면 같은 조건을 입력하고 ‘보관된 동일 조건 재사용’을 선택하세요.</p>
+        <p class="card-note">최근 판정에는 정지된 규칙의 과거 결과도 포함됩니다. 현재 시세 상태가 아니며, 마지막 정상 평가 거래일은 아래 규칙별 상세에서 확인하세요.</p>
       </section>
       <section class="card"><h2 id="rule-heading">조건 등록</h2>
         <label for="template">빠른 설정</label><select id="template"><option value="">직접 설정</option><option value="ma200">200일 SMA 양방향 돌파</option><option value="ma50">50일·200일 SMA 교차</option><option value="change">일간 ±5%</option><option value="rsi30">RSI 30 하향 진입</option><option value="rsi70">RSI 70 상향 진입</option></select>

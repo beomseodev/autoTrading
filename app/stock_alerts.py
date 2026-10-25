@@ -92,12 +92,20 @@ def set_settings(payload: SettingsInput, request: Request):
     return {"revision": payload.revision + 1, "consent": payload.consent}
 
 
+@router.get("/api/alerts/instrument")
+def instrument_preview(symbol: str = Query(min_length=1, max_length=20)):
+    return resolve_instrument(symbol)
+
+
 @router.get("/api/alerts/watchlist")
 def watchlist(request: Request):
     u = user(request)
     with database() as conn:
         rows = conn.execute("""SELECT w.id, i.id AS "instrumentId", i.symbol, i.metadata,
-            (SELECT count(*) FROM alert_rules r WHERE r.user_id=w.user_id AND r.instrument_id=i.id AND NOT r.archived) AS "ruleCount"
+            (SELECT count(*) FROM alert_rules r WHERE r.user_id=w.user_id AND r.instrument_id=i.id AND NOT r.archived) AS "ruleCount",
+            ARRAY(SELECT DISTINCT COALESCE(r.last_result->>'status', 'data_pending')
+                  FROM alert_rules r WHERE r.user_id=w.user_id AND r.instrument_id=i.id AND NOT r.archived
+                  ORDER BY 1) AS "dataStatuses"
             FROM alert_watchlist w JOIN alert_instruments i ON i.id=w.instrument_id
             WHERE w.user_id=%s AND NOT w.archived ORDER BY i.symbol""", (u["id"],)).fetchall()
     return {"items": rows}
