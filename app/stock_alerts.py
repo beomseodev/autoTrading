@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.alert_rules import PARAMS, LABELS, CORE_TYPES, normalize_rule
+from app.alert_rules import PARAMS, LABELS, CORE_TYPES, HOLDING_TYPES, normalize_rule
 from app.services.alert_data import resolve_instrument
 from app.services.alert_store import database, sync_user, owned, lock_user, check_revision, json_value
 
@@ -65,6 +65,8 @@ class RuleInput(Input):
     @model_validator(mode="after")
     def validate_params(self):
         self.params = normalize_rule(self.type, self.params)
+        if self.type in HOLDING_TYPES and not self.params['useSavedPortfolio']:
+            raise ValueError('계정에 저장된 보유자산 연결을 직접 선택해주세요.')
         if len(set(self.instrumentIds)) != len(self.instrumentIds):
             raise ValueError("중복 종목을 제거해주세요.")
         return self
@@ -192,6 +194,13 @@ def rules(request: Request):
 @router.post("/api/alerts/rules")
 def add_rules(payload: RuleInput, request: Request):
     u = user(request)
+    if payload.type in HOLDING_TYPES:
+        from app.services.alert_holdings import validate_connection
+        with database() as conn:
+            symbols=conn.execute('''SELECT i.symbol FROM alert_watchlist w JOIN alert_instruments i ON i.id=w.instrument_id
+                WHERE w.user_id=%s AND w.instrument_id=ANY(%s) AND NOT w.archived''',(u['id'],payload.instrumentIds)).fetchall()
+        if len(symbols)!=len(payload.instrumentIds):raise HTTPException(404,'본인 관심종목을 선택해주세요.')
+        validate_connection(u,[r['symbol'] for r in symbols])
     reference=resolve_instrument(payload.params['benchmark']) if payload.type=='relative_performance' else None
     with database() as conn:
         lock_user(conn, u["id"])
@@ -228,10 +237,17 @@ def add_rules(payload: RuleInput, request: Request):
 def patch_rule(identity: UUID, payload: RulePatch, request: Request):
     u = user(request)
     reference=None
-    if payload.params is not None:
+    if payload.params is not None or payload.enabled is True:
         with database() as conn:
             before=owned(conn,'alert_rules',identity,u['id'])
-        if before['kind']=='relative_performance':
+            symbol=conn.execute('SELECT symbol FROM alert_instruments WHERE id=%s',(before['instrument_id'],)).fetchone()['symbol']
+        if before['kind'] in HOLDING_TYPES:
+            from app.services.alert_holdings import validate_connection
+            try:p=normalize_rule(before['kind'],payload.params if payload.params is not None else before['params'])
+            except ValueError:raise HTTPException(422,'보유자산 조건을 확인해주세요.') from None
+            if not p['useSavedPortfolio']:raise HTTPException(422,'계정에 저장된 보유자산 연결을 직접 선택해주세요.')
+            validate_connection(u,[symbol])
+        if before['kind']=='relative_performance' and payload.params is not None:
             try:p=normalize_rule(before['kind'],payload.params)
             except ValueError:raise HTTPException(422,'규칙 매개변수를 확인해주세요.') from None
             reference=resolve_instrument(p['benchmark'])

@@ -153,6 +153,20 @@ PARAMS['relative_performance']=Relative
 LABELS['relative_performance']='비교 종목 대비 수익률 차이'
 
 
+class HoldingReturn(Direction):
+    useSavedPortfolio: bool = Field(False,strict=True)
+    thresholdPct: float = Field(10,ge=-100,le=10000)
+
+
+class HoldingWeight(HoldingReturn):
+    thresholdPct: float = Field(20,ge=0,le=100)
+
+
+HOLDING_TYPES=('holding_return','holding_weight')
+PARAMS.update(holding_return=HoldingReturn,holding_weight=HoldingWeight)
+LABELS.update(holding_return='저장 평단 대비 수익률',holding_weight='저장 총자산 대비 보유 비중')
+
+
 def contains_price_rule(kind, params):
     return kind in ("price_cross","retest") or (kind == "all_of" and any(c["type"] == "price_cross" for c in params["conditions"]))
 
@@ -185,6 +199,7 @@ def evaluate_rule(kind, params, bars, *, state=None, session_age=None):
     """bars are one split-adjusted snapshot through the target completed session."""
     p = normalize_rule(kind, params)
     result = {"status": "insufficient_data", "triggers": [], "values": {}, "reason": "계산 자료 부족"}
+    if kind in HOLDING_TYPES:return {**result,'reason':'계정에 저장한 보유자산 평가가 필요합니다.'}
     if len(bars) < minimum_bars(kind, p):
         return result
     if kind == "retest":

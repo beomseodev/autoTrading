@@ -9,8 +9,8 @@
 | 2 | 같은 종목·거래일 AND 2~3조건 | 완료, 네 역할 통과 |
 | 3 | 돌파일 가격 고정 재접근 | 완료, 네 역할 검토·수정 후 팀장 승인 |
 | 4 | 동일 시장·통화 상대 수익률 | 완료, 네 역할 검토·수정 후 팀장 승인 |
-| 5 | 저장 보유자산 기반 평단·비중 | 진행 중 |
-| 6 | 실적·배당 일정·변경 | 대기 |
+| 5 | 저장 보유자산 기반 평단·비중 | 완료, 네 역할 재검토 통과 |
+| 6 | 실적·배당 일정·변경 | 진행 중 |
 | 7 | 한국·미국 공시 | 대기 |
 | 8 | 채널별 일간·주간 | 대기 |
 | 9 | 웹 푸시 | 대기 |
@@ -39,3 +39,11 @@ Extension tests 18 passed before follow-up; added 70-session chunk/resume and in
 Four Orca roles participated, no missing roles or provider substitutions. Adopted findings: validate against exchange sessions even when both inputs omit the same day; track inserted/deleted historical rows; retain reference hash and correct same-instrument hash pairs; update visible deferred status immediately after retry exhaustion; explain percentage points and price-only returns in email. Added correction lookup indexes. Critic re-read the latest fixes before settlement and cleared required findings. Coordinator reproduced failures and verified fixes; all workers released. Reports: `.team-review/extensions-f4-*.md`.
 
 Before review fixes, full Python suite: 305 passed / one load test skipped; Chrome passed. After fixes, related job/extension tests: 42 passed; latest relative tests: 7 passed including shared-reference account isolation and cancellation after benchmark edits. Format tests: 4 passed. Representative correction-query timing is included in the final load review; no live data or mail was sent.
+
+## Feature 5 verification
+
+All four Orca roles reviewed and rechecked the implementation; all follow-ups report zero required changes. No missing roles/provider substitutions, all workers released. Reports: `.team-review/extensions-f5-*-followup.md`. Adopted findings: preserve retry budget while waiting for shared inputs; checkpoint metadata lookup under a time budget; share only the latest confirmed valuation inputs per account; isolate cost-return dependencies; retain both sides of correction evidence; describe values as previous/current evaluations.
+
+Conflicting Forex daily-bar timezone documentation led to replacing the daily-bar assumption with the documented historical `/exchange_rate` contract: explicit UTC date/time, symbol/rate/timestamp validation, prior completed UTC weekday end. References: https://twelvedata.com/docs and https://support.twelvedata.com/en/articles/5745849-timezones. Current and preceding FX points are rechecked; older FX corrections require a revision feed and are not guaranteed. Actual contracted API access and delivery activation remain outside this development scope.
+
+Full Python before review fixes: 313 passed / load test skipped; Chrome passed. Related jobs/extensions after fixes: 51 passed. Latest holdings suite: 17 passed, including account paths, five financial edit reset cases, dependency recovery, data sharing, previous-date corrections, cash-inclusive weight crosses, frozen delivery cancellation and FX boundaries.

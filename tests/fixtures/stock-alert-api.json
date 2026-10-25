@@ -149,6 +149,26 @@
         "period": 20,
         "thresholdPct": 0
       }
+    },
+    {
+      "type": "holding_return",
+      "label": "저장 평단 대비 수익률",
+      "composable": false,
+      "defaults": {
+        "direction": "both",
+        "useSavedPortfolio": false,
+        "thresholdPct": 10
+      }
+    },
+    {
+      "type": "holding_weight",
+      "label": "저장 총자산 대비 보유 비중",
+      "composable": false,
+      "defaults": {
+        "direction": "both",
+        "useSavedPortfolio": false,
+        "thresholdPct": 20
+      }
     }
   ]
 }

@@ -5,6 +5,8 @@ function describeRule(kind,p) {
   const direction={up:'상향 돌파',down:'하향 돌파',both:'상향 또는 하향 돌파'}[p.direction]||'';
   const ma=`${p.period}거래일 ${p.average==='ema'?'지수':'단순'}이동평균`;
   const descriptions={
+    holding_return:`이 계정의 저장 평단 대비 가격 수익률이 ${p.thresholdPct}%를 ${direction}한 점검일. 현금배당·수수료 제외. 첫 평가·보유 내역 변경·재개 시 비교 기준을 초기화합니다. 분할 시 수량·평단 확인 후 재개가 필요합니다.`,
+    holding_weight:`이 계정의 현금을 포함한 저장 총자산 중 종목 비중이 ${p.thresholdPct}%를 ${direction}한 점검일. 각 시장의 최근 확정 종가와 직전 UTC 평일 말 시점에 조회한 환율을 사용합니다. 첫 평가·보유 내역 변경·재개 시 비교 기준을 초기화합니다.`,
     relative_performance:`최근 ${p.period}거래일 가격 수익률에서 ${p.benchmark} 수익률을 뺀 차이가 ${p.thresholdPct}%p를 ${direction}한 날 (같은 시장·통화, 분할 조정·현금배당 제외)`,
     price_ma_cross:`종가가 ${ma}을 ${direction}한 날`,
     ma_cross:`${p.shortPeriod}거래일선이 ${p.longPeriod}거래일선을 ${direction}한 날 (${p.average==='ema'?'EMA':'SMA'})`,
@@ -23,8 +25,9 @@ function describeValues(values={},kind='',params={},currency='현지 통화') {
   values={...values};
   if(kind==='daily_change')values.threshold=params.thresholdPct;
   if(kind==='range_breakout')delete values.threshold;
-  const unit=kind==='relative_performance'?'%p':['daily_change','drawdown_cross'].includes(kind)?'%':kind==='volume_spike'?'주':kind==='rsi_cross'?'':kind?' '+currency:'';
+  const unit=kind==='relative_performance'?'%p':['daily_change','drawdown_cross','holding_return','holding_weight'].includes(kind)?'%':kind==='volume_spike'?'주':kind==='rsi_cross'?'':kind?' '+currency:'';
   const labels={previousValue:'전일 값',value:'당일 값',previousThreshold:'전일 기준',threshold:'기준',close:'종가 (현지 통화)',previousHigh:'직전 최고 종가',previousLow:'직전 최저 종가'};
+  if(['holding_return','holding_weight'].includes(kind))Object.assign(labels,{previousValue:'직전 평가 값',value:'현재 평가 값'});
   return Object.entries(values).filter(([key,value])=>labels[key]&&Number.isFinite(value)).map(([key,value])=>`${labels[key]}: ${value.toLocaleString('ko-KR',{maximumFractionDigits:6})}${['close','previousHigh','previousLow'].includes(key)?' '+currency:unit}`).join(' · ')||'비교 수치 없음';
 }
 function describeState(rule){

@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import pandas as pd
 from fastapi import HTTPException
 
-from app.alert_rules import evaluate_rule, LABELS, contains_price_rule, minimum_bars
+from app.alert_rules import evaluate_rule, LABELS, contains_price_rule, minimum_bars, HOLDING_TYPES
 from app.services.alert_data import (DataPending, adjusted_bars, calendar, expected_session,
                                     fingerprint, load_daily_bars, session_close)
 from app.services.alert_email import email_configured, make_payload, send_payload
@@ -110,6 +110,10 @@ def mark_corrections(conn, instrument_id, cached, snapshot, new_hash):
     changed_days={x["date"] for x in overlap if x!=old_by_day.get(x["date"])} | (old_dates-{x['date'] for x in overlap})
     if actions != old["splits"]:
         changed_days.update(old_dates)
+    holdings=conn.execute("SELECT * FROM alert_rules WHERE enabled AND NOT archived AND kind=ANY(%s) AND evaluation_state->'sourceIds' ? %s FOR UPDATE",(list(HOLDING_TYPES),str(instrument_id))).fetchall()
+    for rule in holdings:
+        if changed_days.intersection(rule['evaluation_state'].get('dates',{}).values()):
+            conn.execute('UPDATE alert_rules SET enabled=false,revision=revision+1,last_result=%s WHERE id=%s',(json_value({'status':'needs_review','triggers':[],'reason':'보유자산 평가 근거가 정정되었습니다. 저장 내역 확인 후 재개해주세요.'}),rule['id']))
     armed = conn.execute("""SELECT * FROM alert_rules WHERE instrument_id=%s AND kind='retest'
         AND enabled AND NOT archived AND evaluation_state<>'{}' FOR UPDATE""",(instrument_id,)).fetchall()
     for rule in armed:
@@ -117,8 +121,13 @@ def mark_corrections(conn, instrument_id, cached, snapshot, new_hash):
             conn.execute("""UPDATE alert_rules SET enabled=false,revision=revision+1,last_result=%s WHERE id=%s""",
                 (json_value({"status":"needs_review","reason":"돌파 근거 자료가 정정되었습니다. 조건 확인 후 재개해주세요.","triggers":[]}),rule["id"]))
     events = conn.execute("""SELECT e.*,r.kind FROM alert_events e JOIN alert_rules r ON r.id=e.rule_id
-        WHERE (e.instrument_id=%s OR e.payload->>'benchmarkId'=%s) AND e.created_at>=now()-interval '180 days'""", (instrument_id,str(instrument_id))).fetchall()
+        WHERE (e.instrument_id=%s OR e.payload->>'benchmarkId'=%s OR e.payload->'sourceIds' ? %s) AND e.created_at>=now()-interval '180 days'""", (instrument_id,str(instrument_id),str(instrument_id))).fetchall()
     for event in events:
+        if event['kind'] in HOLDING_TYPES:
+            dates=list(event['payload']['result']['state']['dates'].values())+list(event['payload']['result'].get('previousDates',{}).values())
+            if changed_days.intersection(dates):
+                conn.execute('UPDATE alert_events SET correction=%s WHERE id=%s',(json_value({'reason':'보유자산 평가에 사용된 자료 정정','instrumentId':str(instrument_id),'previousHash':fingerprint(old),'newHash':new_hash}),event['id']))
+            continue
         if event["kind"]=="relative_performance":
             days=[b['date'] for b in old['raw'] if b['date']<=str(event['session_date'])][-minimum_bars(event['kind'],event['payload']['params']):]
             if days and any(days[0]<=day<=str(event['session_date']) for day in changed_days):
@@ -152,8 +161,11 @@ def evaluation_bars(rule, snapshot, reference, day):
     return [{**b,'referenceClose':r['close']} for b,r in zip(bars,ref)]
 
 
-def evaluate_task(task, run, token):
+def evaluate_task(task, run, token,portfolio_context=None):
     payload = task["payload"]
+    if payload['kind'] in HOLDING_TYPES:
+        from app.services.alert_holdings import evaluate_task as evaluate_holding_task
+        return evaluate_holding_task(task,run,token,portfolio_context)
     meta = payload["metadata"]
     with database() as conn:
         dependencies=[payload['instrument_id']]+([payload['benchmark_instrument_id']] if payload.get('benchmark_instrument_id') else [])
@@ -273,12 +285,18 @@ def prepare_digests(run, token, now, started):
             pending = conn.execute("""SELECT count(*) AS n FROM alert_tasks WHERE run_id=%s AND kind='evaluate'
                 AND payload->>'user_id'=%s AND status='pending'""", (run["id"], str(user["id"]))).fetchone()["n"]
             existing = conn.execute("SELECT * FROM alert_digests WHERE user_id=%s AND digest_date=%s AND kind='daily'", (user["id"], run["digest_date"])).fetchone()
+            holding_rules=conn.execute('SELECT id FROM alert_rules WHERE user_id=%s AND enabled AND NOT archived AND kind=ANY(%s) LIMIT 1',(user['id'],list(HOLDING_TYPES))).fetchone()
         if pending or existing:
             continue
         try:
             legacy = legacy_section(user)
         except (HTTPException, DataPending):
             legacy = "리밸런싱 자료를 확인하지 못해 해당 점검을 보류했습니다."
+        portfolio_hash=None
+        if holding_rules:
+            from app.services.alert_holdings import read_portfolio,financial_fingerprint
+            try:portfolio_hash=financial_fingerprint(read_portfolio(user)[0])
+            except (HTTPException,DataPending,ValueError):pass
         with database() as conn:
             fence(conn, run["id"], token)
             current = conn.execute("SELECT * FROM alert_users WHERE id=%s FOR UPDATE", (user["id"],)).fetchone()
@@ -292,6 +310,7 @@ def prepare_digests(run, token, now, started):
                     AND d.payload->'eventIds' ? e.id::text) ORDER BY e.session_date,e.id""", (user["id"], run["digest_date"])).fetchall()
             # Limit delayed delivery to five actual market sessions per instrument.
             events = [e for e in events if len(calendar_from_event(e, run)) <= 5 and not e["correction"]]
+            events=[e for e in events if e['payload'].get('kind') not in HOLDING_TYPES or e['payload'].get('portfolioFingerprint')==portfolio_hash]
             for event in events:
                 event["payload"] = {**event["payload"], "delayed": event["session_date"] < expected_session(event["metadata"], run["cutoff"])}
             deferred = conn.execute("""SELECT count(*) AS n FROM alert_tasks WHERE run_id=%s AND kind='evaluate'
@@ -301,6 +320,7 @@ def prepare_digests(run, token, now, started):
                        "eventIds": [str(e["id"]) for e in events],
                        "rules": {str(e["rule_id"]): e["meaning_version"] for e in events}, "envelope": envelope,
                        "deferred": deferred}
+            if any(e['payload'].get('kind') in HOLDING_TYPES for e in events):payload['portfolioFingerprint']=portfolio_hash
             conn.execute("""INSERT INTO alert_digests(id,user_id,digest_date,payload,status) VALUES(%s,%s,%s,%s,%s)
                 ON CONFLICT(user_id,digest_date,kind) DO UPDATE SET payload=EXCLUDED.payload,status=EXCLUDED.status
                 WHERE alert_digests.attempts=0""", (uuid4(), user["id"], run["digest_date"], json_value(payload),
@@ -308,12 +328,21 @@ def prepare_digests(run, token, now, started):
 
 
 def calendar_from_event(event, run):
+    if event['payload'].get('kind') in HOLDING_TYPES:
+        return range(max(0,(run['digest_date']-event['session_date']).days-2))
     meta = event["metadata"]
     target = expected_session(meta, run["cutoff"])
     return calendar(meta["calendar"], target.year).sessions_in_range(event["session_date"], target)
 
 
 def send_digest(identity, run=None, token=None):
+    from app.services.alert_holdings import read_portfolio,financial_fingerprint
+    with database() as conn:
+        check=conn.execute('SELECT d.payload,u.google_sub,u.email FROM alert_digests d JOIN alert_users u ON u.id=d.user_id WHERE d.id=%s',(identity,)).fetchone()
+    portfolio_valid=True
+    if check and check['payload'].get('portfolioFingerprint'):
+        try:portfolio_valid=financial_fingerprint(read_portfolio(check)[0])==check['payload']['portfolioFingerprint']
+        except (HTTPException,DataPending,ValueError):return
     with database() as conn:
         if run:
             fence(conn, run["id"], token)
@@ -325,7 +354,7 @@ def send_digest(identity, run=None, token=None):
         if not row or row["status"] not in ("pending", "sending", "unknown", "retryable_failed"):
             return
         payload = row["payload"]
-        valid = user and user["consent"] and not user["suppressed"] and user["email"] == payload["email"] and user["unsubscribe_version"] == payload["unsubscribeVersion"]
+        valid = portfolio_valid and user and user["consent"] and not user["suppressed"] and user["email"] == payload["email"] and user["unsubscribe_version"] == payload["unsubscribeVersion"]
         for rule_id, version in payload["rules"].items():
             if not conn.execute("SELECT id FROM alert_rules WHERE id=%s AND user_id=%s AND enabled AND NOT archived AND meaning_version=%s", (rule_id, row["user_id"], version)).fetchone():
                 valid = False
@@ -359,13 +388,17 @@ def process_alert_run(*, now=None):
     if os.getenv("STOCK_ALERTS_SEND_ENABLED") != "true":
         # No production run/task/event/digest or cursor mutations in dry-run mode.
         with database() as conn:
-            rules = conn.execute("SELECT r.*,b.snapshot,i.metadata,ref.snapshot AS reference FROM alert_rules r JOIN alert_instruments i ON i.id=r.instrument_id LEFT JOIN alert_daily_bars b ON b.instrument_id=r.instrument_id LEFT JOIN alert_daily_bars ref ON ref.instrument_id=r.benchmark_instrument_id WHERE r.enabled AND NOT r.archived").fetchall()
+            rules = conn.execute("SELECT r.*,b.snapshot,i.symbol,i.metadata,ref.snapshot AS reference FROM alert_rules r JOIN alert_instruments i ON i.id=r.instrument_id LEFT JOIN alert_daily_bars b ON b.instrument_id=r.instrument_id LEFT JOIN alert_daily_bars ref ON ref.instrument_id=r.benchmark_instrument_id WHERE r.enabled AND NOT r.archived").fetchall()
         counts = {}
         for rule in rules:
             try:
                 status = evaluate_rule(rule["kind"], rule["params"], evaluation_bars(rule,rule["snapshot"],rule['reference'],rule["snapshot"]["target"]))["status"] if rule["snapshot"] else "data_pending"
             except DataPending:
                 status='data_pending'
+            if rule['kind'] in HOLDING_TYPES:
+                from app.services.alert_holdings import dry_result
+                try:status=dry_result(rule,now)['status']
+                except (HTTPException,DataPending,ValueError):status='data_pending'
             if rule["kind"]=="retest" and rule["snapshot"]:
                 snap=rule["snapshot"]
                 pending=[b["date"] for b in snap["raw"] if (not rule["last_session"] or b["date"]>str(rule["last_session"]))
@@ -393,6 +426,18 @@ def process_alert_run(*, now=None):
     metrics = {}
     metrics_token = metrics_context.set(metrics)
     try:
+        from app.services.alert_holdings import prepare_context
+        contexts={}
+        with database() as conn:
+            holdings=conn.execute("SELECT payload FROM alert_tasks WHERE run_id=%s AND kind='evaluate' AND status='pending' AND payload->>'kind'=ANY(%s)",(run['id'],list(HOLDING_TYPES))).fetchall()
+            owners=conn.execute('SELECT * FROM alert_users WHERE id=ANY(%s::uuid[])',([h['payload']['user_id'] for h in holdings],)).fetchall()
+        for owner in owners:
+            if time.monotonic()-started>120:break
+            selected=[h['payload'] for h in holdings if h['payload']['user_id']==str(owner['id'])]
+            try:
+                contexts[str(owner['id'])]=prepare_context(owner,run,token,[r['symbol'] for r in selected],any(r['kind']=='holding_weight' for r in selected),deadline=started+120)
+            except (HTTPException,ValueError):contexts[str(owner['id'])]=DataPending('portfolio_unavailable')
+            except DataPending as exc:contexts[str(owner['id'])]=exc
         with database() as conn:
             tasks = conn.execute("SELECT * FROM alert_tasks WHERE run_id=%s AND status='pending' AND next_attempt_at<=now() ORDER BY kind,id", (run["id"],)).fetchall()
         for task in sorted(tasks, key=lambda x: x["kind"] != "fetch"):
@@ -404,14 +449,16 @@ def process_alert_run(*, now=None):
                         continue
                     fetch_task(task, run, token, now)
                 else:
-                    evaluate_task(task, run, token)
+                    if task['payload']['kind'] in HOLDING_TYPES:
+                        evaluate_task(task,run,token,portfolio_context=contexts.get(task['payload']['user_id']))
+                    else:evaluate_task(task, run, token)
             except DataPending as exc:
                 if exc.code == "lease_expired":
                     return {"status": "lease_expired"}
                 with database() as conn:
                     fence(conn, run["id"], token)
-                    # Rate limiting does not consume a data-retry attempt.
-                    increment = int(exc.code != "provider_rate_limited")
+                    # Waiting for shared inputs is not an evaluation failure.
+                    increment = int(exc.code not in ('provider_rate_limited','portfolio_pending','portfolio_prices_pending'))
                     if exc.code == "provider_rate_limited":
                         conn.execute("UPDATE alert_runs SET rate_limit_count=rate_limit_count+1 WHERE id=%s", (run["id"],))
                     updated=conn.execute("""UPDATE alert_tasks SET attempts=attempts+%s,error=%s,

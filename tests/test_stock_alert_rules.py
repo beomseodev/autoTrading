@@ -2,7 +2,7 @@ import math
 from datetime import date,timedelta
 
 import pytest
-from app.alert_rules import PARAMS, evaluate_rule, minimum_bars, normalize_rule
+from app.alert_rules import PARAMS, HOLDING_TYPES, evaluate_rule, minimum_bars, normalize_rule
 
 
 def bars(prices, volume=10):
@@ -30,7 +30,7 @@ def test_signals(kind, params, prices, expected):
     assert result["status"] == ("signal" if expected else "no_signal")
 
 
-@pytest.mark.parametrize("kind", list(PARAMS))
+@pytest.mark.parametrize("kind", [k for k in PARAMS if k not in HOLDING_TYPES])
 def test_minimum_and_validation(kind):
     params = {"price": 10} if kind == "price_cross" else {}
     p = normalize_rule(kind, params)

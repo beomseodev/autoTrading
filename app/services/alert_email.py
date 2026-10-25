@@ -48,6 +48,13 @@ def make_payload(user, day, events, deferred=0, legacy=None, test=False):
     for event in events:
         payload = event["payload"]
         direction = {"up": "상향", "down": "하향", "volume": "거래량 급증", "drawdown": "낙폭 진입"}.get(event["trigger_kind"], event["trigger_kind"])
+        if payload.get('kind') in ('holding_return','holding_weight'):
+            p,v=payload['params'],payload['result']['values']
+            lines.extend([f"{payload['symbol']} · {event['session_date']} 점검 · {payload['label']}",
+                f"직전 평가 {v['previousValue']:.6g}% → 현재 {v['value']:.6g}% · 기준 {p['thresholdPct']}% {direction} 돌파",
+                '계정에 저장된 보유자산 기준 · 가격 수익률은 현금배당·수수료 제외, 비중은 현금 포함',
+                '자료 기준일: '+', '.join(f'{s} {d}' for s,d in payload['result']['state']['dates'].items()),''])
+            continue
         if payload.get('kind')=='relative_performance':
             p,v=payload['params'],payload['result']['values']
             lines.extend([f"{payload['symbol']} · {event['session_date']} 종가",

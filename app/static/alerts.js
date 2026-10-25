@@ -6,6 +6,7 @@ const names = {average:"평균 방식",period:"기간 (거래일)",direction:"�
 const options = {average:[['sma','단순이동평균 SMA'],['ema','지수이동평균 EMA']],direction:[['both','양방향'],['up','상향'],['down','하향']],crossMode:[['signal','시그널선'],['zero','0선']],event:[['upper_exit','상단 위 돌파'],['lower_exit','하단 아래 이탈'],['upper_reentry','상단 아래 복귀'],['lower_reentry','하단 위 복귀']]};
 names.windowSessions='대기 기간 (거래일)';names.tolerancePct='재접근 허용폭 (%)';
 names.benchmark='비교 종목 코드 (같은 시장·통화)';
+names.useSavedPortfolio='이 계정에 저장된 보유자산을 연결합니다 (직접 선택)';
 const statuses = {signal:'새 신호',no_signal:'정상 무신호',no_new_session:'휴장 또는 활성화 후 새 거래일 없음',insufficient_data:'계산 자료 부족',invalid_data:'자료 검증 실패',needs_review:'조건 재확인 필요',pending:'발송 대기',sending:'전송 중',accepted:'공급자 접수',delivered:'배달 확인',no_signals:'새 신호 없음',unknown:'결과 확인 필요',retryable_failed:'발송 재시도 대기',permanent_failed:'발송 실패',canceled:'설정 변경으로 취소',bounced:'반송',complained:'스팸신고',suppressed:'발송 중지'};
 statuses.deferred='조회 실패·자료 보류, 신호 여부 미확인';
 statuses.missed_window='발송 시간 내 미접수';
@@ -65,10 +66,11 @@ function parameterFields(kind,params,container,prefix='param-') {
     const label=element('label',kind==='relative_performance'&&key==='thresholdPct'?'수익률 차이 기준 (%p)':names[key]||key),control=element(options[key]?'select':'input');
     control.dataset.param=key;control.id=prefix+key;
     if(options[key])options[key].forEach(([val,text])=>{const opt=element('option',text);opt.value=val;control.append(opt);});
-    else {control.type=typeof value==='string'?'text':'number';control.step=key.toLowerCase().includes('period')||key==='period'?'1':'any';control.required=true;}
+    else {control.type=typeof value==='boolean'?'checkbox':typeof value==='string'?'text':'number';control.step=key.toLowerCase().includes('period')||key==='period'?'1':'any';control.required=true;}
+    if(control.type==='checkbox')control.checked=value;
     control.value=value;label.append(control);container.append(label);controls.push([key,control]);
   });
-  return ()=>Object.fromEntries(controls.map(([key,c])=>[key,c.tagName==='SELECT'||c.type==='text'?c.value:Number(c.value)]));
+  return ()=>Object.fromEntries(controls.map(([key,c])=>[key,c.type==='checkbox'?c.checked:c.tagName==='SELECT'||c.type==='text'?c.value:Number(c.value)]));
 }
 function resetEdit(){state.edit=null;$('kind').disabled=false;$('rule-name').value='';$('cancel-edit').hidden=true;$('resolve-edit').hidden=true;$('restore-archived').checked=false;$('save-rule').textContent='선택 종목에 규칙 등록';$('rule-heading').textContent='조건 등록';fields(typeInfo().defaults);}
 function render(){
@@ -84,7 +86,7 @@ function render(){
   });
   $('rules').replaceChildren();
   if(!state.rules.length)$('rules').append(element('li','등록한 규칙이 없습니다.'));
-  state.rules.forEach(r=>{const li=element('li'),detail=element('div',`${r.symbol} · ${r.name||state.settings.types.find(x=>x.type===r.kind).label}`,'detail');detail.append(element('small',describeRule(r.kind,r.params)),element('small',describeState(r)),element('small',r.enabled?'활성':'정지'),element('small','마지막 정상 평가 거래일: '+(r.last_session||'없음')),element('small',r.last_result?(statuses[r.last_result.status]||r.last_result.status)+' · '+(r.last_result.reason||''):'자료 준비 중 · 다음 점검부터 평가합니다.'));li.append(detail,button(r.enabled?'정지':'재개',async()=>{await api('/api/alerts/rules/'+r.id,'PATCH',{revision:r.revision,enabled:!r.enabled});await refresh();}),button('수정',async()=>{state.edit=r;$('kind').value=r.kind;$('kind').disabled=true;$('rule-name').value=r.name;fields(r.params);$('cancel-edit').hidden=false;$('save-rule').textContent='조건 수정 저장';$('rule-heading').textContent=r.symbol+' 조건 수정';$('rule-heading').scrollIntoView({block:'center'});$('rule-name').focus();}),button('삭제',async()=>{await api('/api/alerts/rules/'+r.id,'DELETE');await refresh();}));$('rules').append(li);});
+  state.rules.forEach(r=>{const li=element('li'),detail=element('div',`${r.symbol} · ${r.name||state.settings.types.find(x=>x.type===r.kind).label}`,'detail');detail.append(element('small',describeRule(r.kind,r.params)),element('small',describeState(r)),element('small',r.enabled?'활성':'정지'),element('small','마지막 정상 평가일: '+(r.last_session||'없음')),element('small',r.last_result?(statuses[r.last_result.status]||r.last_result.status)+' · '+(r.last_result.reason||''):'자료 준비 중 · 다음 점검부터 평가합니다.'));li.append(detail,button(r.enabled?'정지':'재개',async()=>{await api('/api/alerts/rules/'+r.id,'PATCH',{revision:r.revision,enabled:!r.enabled});await refresh();}),button('수정',async()=>{state.edit=r;$('kind').value=r.kind;$('kind').disabled=true;$('rule-name').value=r.name;fields(r.params);$('cancel-edit').hidden=false;$('save-rule').textContent='조건 수정 저장';$('rule-heading').textContent=r.symbol+' 조건 수정';$('rule-heading').scrollIntoView({block:'center'});$('rule-name').focus();}),button('삭제',async()=>{await api('/api/alerts/rules/'+r.id,'DELETE');await refresh();}));$('rules').append(li);});
 }
 async function history(kind,append=false) {
   const result=await api('/api/alerts/'+kind+(append&&state[kind]?'?cursor='+encodeURIComponent(state[kind]):''));

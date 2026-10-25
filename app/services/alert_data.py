@@ -174,6 +174,7 @@ def fingerprint(snapshot):
 
 
 def load_daily_bars(meta, cutoff, previous=None):
+    if meta.get('type')=='Forex':return load_fx_bars(cutoff,previous)
     target = expected_session(meta, cutoff)
     params = {"symbol": meta["providerSymbol"], "mic_code": meta["mic"], "end_date": target.isoformat()}
     if previous:
@@ -190,3 +191,28 @@ def load_daily_bars(meta, cutoff, previous=None):
     if previous and snapshot["raw"][0]["date"] != previous["raw"][0]["date"]:
         raise DataPending("history_anchor_changed", False)
     return snapshot
+
+
+def expected_fx_day(cutoff):
+    target=cutoff.astimezone(timezone.utc).date()-timedelta(days=1)
+    while target.weekday()>4:target-=timedelta(days=1)
+    return target
+
+
+def load_fx_bars(cutoff,previous=None):
+    target=expected_fx_day(cutoff)
+    rates={b['date']:b for b in previous['raw']} if previous else {}
+    # shortcut: recheck the preceding FX point; older FX revisions need a provider revision feed.
+    days={str(target)}|({previous['target']} if previous else set())
+    for day in sorted(days):
+        point=day+'T23:59:59'
+        response=provider_get('exchange_rate',{'symbol':'USD/KRW','date':point,'timezone':'UTC'})
+        try:
+            rate=float(response['rate'])
+            observed=datetime.fromtimestamp(response['timestamp'],timezone.utc)
+            if response['symbol']!='USD/KRW' or not math.isfinite(rate) or rate<=0 or observed.date().isoformat()!=day or observed>datetime.fromisoformat(point).replace(tzinfo=timezone.utc):
+                raise ValueError('invalid historical FX point')
+            rates[day]={'date':day,'observedAt':observed.isoformat(),**{k:rate for k in ('open','high','low','close')},'volume':0}
+        except (KeyError,ValueError,TypeError,OverflowError,OSError):
+            raise DataPending('invalid_fx_data',False) from None
+    return {'raw':[rates[d] for d in sorted(rates)],'splits':[],'target':str(target),'policy':'historical-utc-fx-point-v1'}

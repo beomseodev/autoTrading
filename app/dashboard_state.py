@@ -14,7 +14,10 @@ router = APIRouter()
 
 
 def dashboard_path(request: Request):
-    user = request.session["user"]
+    return account_dashboard_path(request.session['user'])
+
+
+def account_dashboard_path(user):
     # Keep the original owner's path compatible with existing daily email jobs.
     if is_owner(user):
         return "dashboard.json"
