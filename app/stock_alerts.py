@@ -200,7 +200,7 @@ def add_rules(payload: RuleInput, request: Request):
                 if not payload.restoreArchived:
                     raise HTTPException(409, "보관된 동일 조건이 있습니다. 보관된 조건 재사용에 체크한 뒤 다시 저장해주세요.")
                 conn.execute("""UPDATE alert_rules SET archived=false,enabled=true,name=%s,revision=revision+1,
-                    meaning_version=meaning_version+1,activated_at=now(),last_session=NULL,last_result=NULL WHERE id=%s""", (payload.name, existing["id"]))
+                    meaning_version=meaning_version+1,activated_at=now(),last_session=NULL,last_result=NULL,evaluation_state='{}' WHERE id=%s""", (payload.name, existing["id"]))
                 identities.append(existing["id"])
                 continue
             identity = uuid4()
@@ -234,6 +234,7 @@ def patch_rule(identity: UUID, payload: RulePatch, request: Request):
             WHERE id=%s AND user_id=%s""", (json_value(p), rule_hash(row["kind"], p), payload.name if payload.name is not None else row["name"],
             enabled, int(semantic), semantic, semantic, semantic, identity, u["id"]))
         if semantic or not enabled:
+            conn.execute("UPDATE alert_rules SET evaluation_state='{}' WHERE id=%s",(identity,))
             conn.execute("UPDATE alert_events SET canceled=true WHERE rule_id=%s AND user_id=%s", (identity, u["id"]))
     return {"revision": payload.revision + 1}
 

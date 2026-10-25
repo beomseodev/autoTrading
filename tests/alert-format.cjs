@@ -1,6 +1,6 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {describeRule, describeValues} = require('../app/static/alert-format.js');
+const {describeRule, describeValues,describeState} = require('../app/static/alert-format.js');
 test('conditions explain selected parameters and events without exposing JSON', () => {
   assert.match(describeRule('price_ma_cross', {period:200, average:'sma', direction:'up'}), /200거래일.*상향/);
   assert.match(describeRule('daily_change', {thresholdPct:5, direction:'both'}), /5%/);
@@ -11,4 +11,9 @@ test('daily change and ranges never display an internal zero as their actual thr
   const text=describeValues({value:6,threshold:0,close:106},'daily_change',{thresholdPct:5,direction:'up'},'USD');
   assert.match(text,/6%/);assert.match(text,/5%/);assert.doesNotMatch(text,/기준: 0/);
   assert.doesNotMatch(describeValues({value:106,threshold:0,previousHigh:100,previousLow:90},'range_breakout',{},'USD'),/기준: 0/);
+});
+test('retest current state is separate from a historical waiting result',()=>{
+  const rule={kind:'retest',enabled:true,evaluation_state:{date:'2026-10-22',level:100},metadata:{currency:'USD'}};
+  assert.match(describeState(rule),/2026-10-22.*100 USD.*대기 중/);
+  assert.match(describeState({...rule,enabled:false}),/대기 없음/);
 });

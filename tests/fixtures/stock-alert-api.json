@@ -3,104 +3,105 @@
     {
       "type": "price_ma_cross",
       "label": "종가와 이동평균 교차",
+      "composable": true,
       "defaults": {
         "direction": "both",
         "average": "sma",
         "period": 200
-      },
-      "composable": true
+      }
     },
     {
       "type": "ma_cross",
       "label": "이동평균선 교차",
+      "composable": true,
       "defaults": {
         "direction": "both",
         "average": "sma",
         "shortPeriod": 50,
         "longPeriod": 200
-      },
-      "composable": true
+      }
     },
     {
       "type": "price_cross",
       "label": "지정가격 돌파",
+      "composable": true,
       "defaults": {
         "direction": "both",
         "price": 100.0
-      },
-      "composable": true
+      }
     },
     {
       "type": "daily_change",
       "label": "일간 급등락",
+      "composable": true,
       "defaults": {
         "direction": "both",
         "thresholdPct": 5
-      },
-      "composable": true
+      }
     },
     {
       "type": "rsi_cross",
       "label": "RSI 교차",
+      "composable": true,
       "defaults": {
         "direction": "down",
         "period": 14,
         "level": 30
-      },
-      "composable": true
+      }
     },
     {
       "type": "range_breakout",
       "label": "기간 신고가·신저가",
+      "composable": true,
       "defaults": {
         "direction": "both",
         "period": 252
-      },
-      "composable": true
+      }
     },
     {
       "type": "volume_spike",
       "label": "거래량 급증",
+      "composable": true,
       "defaults": {
         "period": 20,
         "multiple": 2
-      },
-      "composable": true
+      }
     },
     {
       "type": "macd_cross",
       "label": "MACD 교차",
+      "composable": true,
       "defaults": {
         "direction": "both",
         "fastPeriod": 12,
         "slowPeriod": 26,
         "signalPeriod": 9,
         "crossMode": "signal"
-      },
-      "composable": true
+      }
     },
     {
       "type": "bollinger_cross",
       "label": "볼린저밴드 돌파·복귀",
+      "composable": true,
       "defaults": {
         "period": 20,
         "stddev": 2,
         "event": "upper_exit"
-      },
-      "composable": true
+      }
     },
     {
       "type": "drawdown_cross",
       "label": "고점 대비 낙폭 진입",
+      "composable": true,
       "defaults": {
         "period": 60,
         "thresholdPct": 10
-      },
-      "composable": true
+      }
     },
     {
       "type": "all_of",
       "label": "같은 날 모든 조건 충족 (AND)",
+      "composable": false,
       "defaults": {
         "conditions": [
           {
@@ -119,8 +120,24 @@
             }
           }
         ]
-      },
-      "composable": false
+      }
+    },
+    {
+      "type": "retest",
+      "label": "돌파 후 고정 가격 재접근",
+      "composable": false,
+      "defaults": {
+        "trigger": {
+          "type": "price_ma_cross",
+          "params": {
+            "direction": "up",
+            "average": "sma",
+            "period": 200
+          }
+        },
+        "windowSessions": 5,
+        "tolerancePct": 1
+      }
     }
   ]
 }

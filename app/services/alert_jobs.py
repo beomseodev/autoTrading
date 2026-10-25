@@ -102,10 +102,24 @@ def mark_corrections(conn, instrument_id, cached, snapshot, new_hash):
     actions = [x for x in snapshot["splits"] if x["date"] <= old["target"]]
     if overlap == old["raw"] and actions == old["splits"]:
         return
+    old_by_day={x["date"]:x for x in old["raw"]}
+    changed_days={x["date"] for x in overlap if x!=old_by_day[x["date"]]}
+    if actions != old["splits"]:
+        changed_days.update(old_dates)
+    armed = conn.execute("""SELECT * FROM alert_rules WHERE instrument_id=%s AND kind='retest'
+        AND enabled AND NOT archived AND evaluation_state<>'{}' FOR UPDATE""",(instrument_id,)).fetchall()
+    for rule in armed:
+        if any(rule["evaluation_state"]["date"]<=day<=old["target"] for day in changed_days):
+            conn.execute("""UPDATE alert_rules SET enabled=false,revision=revision+1,last_result=%s WHERE id=%s""",
+                (json_value({"status":"needs_review","reason":"돌파 근거 자료가 정정되었습니다. 조건 확인 후 재개해주세요.","triggers":[]}),rule["id"]))
     events = conn.execute("""SELECT e.*,r.kind FROM alert_events e JOIN alert_rules r ON r.id=e.rule_id
         WHERE e.instrument_id=%s AND e.created_at>=now()-interval '180 days'""", (instrument_id,)).fetchall()
     for event in events:
-        result = evaluate_rule(event["kind"], event["payload"]["params"], adjusted_bars(snapshot, event["session_date"].isoformat()))
+        before=event["payload"]["result"].get("stateBefore")
+        result = evaluate_rule(event["kind"], event["payload"]["params"], adjusted_bars(snapshot, event["session_date"].isoformat()),state=before)
+        if event["kind"] == "retest" and before:
+            if any(before["date"]<=day<=event["session_date"].isoformat() for day in changed_days):
+                result={"status":"needs_review","triggers":[],"reason":"돌파 이후 순서 자료 정정으로 재확인 필요"}
         if result != event["payload"]["result"]:
             correction = {"previousHash": event["snapshot_hash"], "newHash": new_hash,
                           "reason": "공급자 과거 자료 정정으로 당시 판정이 달라졌습니다. 자동 재발송하지 않습니다.", "result": result}
@@ -131,18 +145,26 @@ def evaluate_task(task, run, token):
     target = snapshot["target"]
     activated = datetime.fromisoformat(payload["activated_at"])
     sessions = [bar["date"] for bar in snapshot["raw"]]
+    if payload["kind"]=="retest" and payload["last_session"] and payload["last_session"]<sessions[0]:
+        raise DataPending("state_history_gap",False)
     eligible = [day for day in sessions if session_close(meta, datetime.fromisoformat(day).date()) > activated and
                 (not payload["last_session"] or day > payload["last_session"])]
     expired = len(eligible) > 5
-    eligible = eligible[-5:]
+    delivery_days = set(eligible[-5:])
+    more = payload["kind"]=="retest" and len(eligible)>64
+    eligible = eligible[:64] if payload["kind"]=="retest" else eligible[-5:]
     evaluations = []
+    evaluation_state = payload.get("evaluation_state",{})
     price_split = contains_price_rule(payload["kind"],payload["params"]) and any(
         session_close(meta, datetime.fromisoformat(x["date"]).date()) > activated for x in snapshot["splits"])
     if price_split:
         evaluations = [(target, {"status": "needs_review", "reason": "분할 후 지정가격을 확인하고 재개해주세요.", "triggers": []})]
     else:
         for day in eligible:
-            result = evaluate_rule(payload["kind"], payload["params"], adjusted_bars(snapshot, day))
+            age = (len(calendar(meta["calendar"],int(day[:4])).sessions_in_range(evaluation_state["date"],day))-1
+                   if payload["kind"]=="retest" and evaluation_state else None)
+            result = evaluate_rule(payload["kind"], payload["params"], adjusted_bars(snapshot, day),state=evaluation_state,session_age=age)
+            evaluation_state = result.get("state",evaluation_state)
             if result["status"] == "insufficient_data" and day != eligible[-1]:
                 # Initial history can warm up during the catch-up window.
                 continue
@@ -161,19 +183,24 @@ def evaluate_task(task, run, token):
                 conn.execute("UPDATE alert_rules SET last_result=%s WHERE id=%s", (json_value(result), current["id"]))
                 finish_task(conn, task, result, "deferred")
                 return True
-            for trigger in result["triggers"]:
+            for trigger in (result["triggers"] if day in delivery_days else []):
                 event = {"symbol": payload["symbol"], "currency": meta["currency"], "kind": payload["kind"], "label": LABELS[payload["kind"]],
                          "params": payload["params"], "result": result}
                 conn.execute("""INSERT INTO alert_events(id,user_id,rule_id,instrument_id,meaning_version,session_date,trigger_kind,snapshot_hash,payload)
                     VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
                              (uuid4(), current["user_id"], current["id"], current["instrument_id"], current["meaning_version"], day,
                               trigger, cached["fingerprint"], json_value(event)))
-            conn.execute("UPDATE alert_rules SET last_session=%s,last_result=%s WHERE id=%s", (day, json_value(result), current["id"]))
+            conn.execute("UPDATE alert_rules SET last_session=%s,last_result=%s,evaluation_state=%s WHERE id=%s", (day, json_value(result),json_value(result.get("state",{})),current["id"]))
+        if more and evaluations:
+            updated={**payload,"last_session":evaluations[-1][0],"evaluation_state":evaluation_state}
+            conn.execute("UPDATE alert_tasks SET payload=%s WHERE id=%s",(json_value(updated),task["id"]))
+            return False
         if not evaluations:
             preview = evaluate_rule(payload["kind"], payload["params"], adjusted_bars(snapshot, target))
             if preview["status"] in ("signal", "no_signal"):
                 preview = {**preview, "status": "no_new_session", "reason": "활성화 후 새 완료 거래일이 없습니다.", "triggers": []}
-            conn.execute("UPDATE alert_rules SET last_result=%s WHERE id=%s", (json_value(preview), current["id"]))
+            if payload["kind"]!="retest" or not current["last_result"]:
+                conn.execute("UPDATE alert_rules SET last_result=%s WHERE id=%s", (json_value(preview), current["id"]))
         finish_task(conn, task, {"status": "evaluated", "sessions": len(evaluations), "expiredGap": expired})
     return True
 
@@ -299,10 +326,24 @@ def process_alert_run(*, now=None):
     if os.getenv("STOCK_ALERTS_SEND_ENABLED") != "true":
         # No production run/task/event/digest or cursor mutations in dry-run mode.
         with database() as conn:
-            rules = conn.execute("SELECT r.*,b.snapshot FROM alert_rules r LEFT JOIN alert_daily_bars b ON b.instrument_id=r.instrument_id WHERE r.enabled AND NOT r.archived").fetchall()
+            rules = conn.execute("SELECT r.*,b.snapshot,i.metadata FROM alert_rules r JOIN alert_instruments i ON i.id=r.instrument_id LEFT JOIN alert_daily_bars b ON b.instrument_id=r.instrument_id WHERE r.enabled AND NOT r.archived").fetchall()
         counts = {}
         for rule in rules:
             status = evaluate_rule(rule["kind"], rule["params"], adjusted_bars(rule["snapshot"], rule["snapshot"]["target"]))["status"] if rule["snapshot"] else "data_pending"
+            if rule["kind"]=="retest" and rule["snapshot"]:
+                snap=rule["snapshot"]
+                pending=[b["date"] for b in snap["raw"] if (not rule["last_session"] or b["date"]>str(rule["last_session"]))
+                         and session_close(rule["metadata"],datetime.fromisoformat(b["date"]).date())>rule["activated_at"]]
+                state=rule["evaluation_state"]
+                status="no_new_session"
+                for day in pending[:64]:
+                    age=len(calendar(rule["metadata"]["calendar"],int(day[:4])).sessions_in_range(state["date"],day))-1 if state else None
+                    result=evaluate_rule("retest",rule["params"],adjusted_bars(snap,day),state=state,session_age=age)
+                    status=result["status"]
+                    if status=="insufficient_data" and day!=pending[-1]:continue
+                    if status not in ("signal","no_signal"):break
+                    state=result["state"]
+                if len(pending)>64:status="data_pending"
             counts[status] = counts.get(status, 0) + 1
         return {"status": "dry_run", "counts": counts, "sending": False}
     if now.astimezone(KST).hour != 8:

@@ -121,8 +121,24 @@ PARAMS["all_of"] = AllOf
 LABELS["all_of"] = "같은 날 모든 조건 충족 (AND)"
 
 
+class Retest(Params):
+    trigger: Condition = Field(default_factory=lambda: Condition(type="price_ma_cross",params={"direction":"up"}))
+    windowSessions: int = Field(5,ge=1,le=30,strict=True)
+    tolerancePct: float = Field(1,gt=0,le=10)
+
+    @model_validator(mode="after")
+    def price_source(self):
+        if self.trigger.type not in ("price_cross","price_ma_cross","range_breakout"):
+            raise ValueError("재접근 기준은 가격·이동평균·기간 고저가 돌파만 가능합니다.")
+        return self
+
+
+PARAMS["retest"] = Retest
+LABELS["retest"] = "돌파 후 고정 가격 재접근"
+
+
 def contains_price_rule(kind, params):
-    return kind == "price_cross" or (kind == "all_of" and any(c["type"] == "price_cross" for c in params["conditions"]))
+    return kind in ("price_cross","retest") or (kind == "all_of" and any(c["type"] == "price_cross" for c in params["conditions"]))
 
 
 def normalize_rule(kind, params):
@@ -132,6 +148,8 @@ def normalize_rule(kind, params):
 
 
 def minimum_bars(kind, p):
+    if kind == "retest":
+        return minimum_bars(p["trigger"]["type"],p["trigger"]["params"])
     if kind == "all_of":
         return max(minimum_bars(c["type"],c["params"]) for c in p["conditions"])
     if kind == "ma_cross":
@@ -146,11 +164,41 @@ def average(series, period, mode):
             series.ewm(span=period, adjust=False, min_periods=period).mean())
 
 
-def evaluate_rule(kind, params, bars):
+def evaluate_rule(kind, params, bars, *, state=None, session_age=None):
     """bars are one split-adjusted snapshot through the target completed session."""
     p = normalize_rule(kind, params)
     result = {"status": "insufficient_data", "triggers": [], "values": {}, "reason": "계산 자료 부족"}
     if len(bars) < minimum_bars(kind, p):
+        return result
+    if kind == "retest":
+        source=p["trigger"]
+        underlying=evaluate_rule(source["type"],source["params"],bars)
+        before=state or {}
+        if underlying["status"] not in ("signal","no_signal"):
+            return {**underlying,"state":before,"stateBefore":before}
+        result={"status":"no_signal","triggers":[],"values":{"close":float(bars[-1]["close"])},
+                "state":before,"stateBefore":before,"reason":"새 돌파를 기다립니다."}
+        dates=[b.get("date") for b in bars]
+        if not all(dates) or dates!=sorted(set(dates)):
+            return {**result,"status":"invalid_data","reason":"순서가 확인된 거래일이 필요합니다."}
+        if before:
+            if before["date"] not in dates:
+                return {**result,"status":"insufficient_data","reason":"돌파일 자료가 필요합니다."}
+            age=session_age if session_age is not None else len(dates)-1-dates.index(before["date"])
+            level=before["level"]
+            result["values"]["threshold"]=level
+            if age>p["windowSessions"]:
+                fresh=evaluate_rule(kind,p,bars,state={})
+                return {**fresh,"stateBefore":before,"reason":fresh["reason"] if fresh["state"] else "재접근 대기 기간이 만료됐습니다."}
+            distance=abs(float(bars[-1]["close"])/level-1)*100
+            if age>0 and distance <= p["tolerancePct"]+1e-12:
+                return {**result,"status":"signal","triggers":["retest"],"state":{},"reason":"돌파일 고정 가격의 허용폭에 처음 재접근했습니다."}
+            return {**result,"reason":"돌파일 고정 가격으로 재접근을 기다립니다."}
+        if underlying["triggers"]:
+            direction=underlying["triggers"][0]
+            level=(underlying["values"]["previousHigh" if direction=="up" else "previousLow"]
+                   if source["type"]=="range_breakout" else underlying["values"]["threshold"])
+            return {**result,"state":{"date":dates[-1],"level":level},"reason":"돌파를 확인했습니다. 다음 거래일부터 재접근을 점검합니다."}
         return result
     if kind == "all_of":
         children = [{**c,"result":evaluate_rule(c["type"],c["params"],bars)} for c in p["conditions"]]

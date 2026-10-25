@@ -1,5 +1,6 @@
 "use strict";
 function describeRule(kind,p) {
+  if(kind==='retest')return describeRule(p.trigger.type,p.trigger.params)+`의 기준 가격을 고정하고 다음 ${p.windowSessions}거래일 안에 종가가 ±${p.tolerancePct}% 이내로 처음 재접근. 대기 중 새 돌파는 기준을 바꾸지 않으며 완료·만료 후 새 돌파가 필요합니다. 정지·재개·계산 조건 변경은 대기를 초기화합니다(이름 변경 제외). 분할·관련 자료 정정 시 확인 후 재개합니다.`;
   if(kind==='all_of')return '같은 거래일에 모두 충족: '+p.conditions.map(c=>describeRule(c.type,c.params)).join(' 그리고 ');
   const direction={up:'상향 돌파',down:'하향 돌파',both:'상향 또는 하향 돌파'}[p.direction]||'';
   const ma=`${p.period}거래일 ${p.average==='ema'?'지수':'단순'}이동평균`;
@@ -25,4 +26,10 @@ function describeValues(values={},kind='',params={},currency='현지 통화') {
   const labels={previousValue:'전일 값',value:'당일 값',previousThreshold:'전일 기준',threshold:'기준',close:'종가 (현지 통화)',previousHigh:'직전 최고 종가',previousLow:'직전 최저 종가'};
   return Object.entries(values).filter(([key,value])=>labels[key]&&Number.isFinite(value)).map(([key,value])=>`${labels[key]}: ${value.toLocaleString('ko-KR',{maximumFractionDigits:6})}${['close','previousHigh','previousLow'].includes(key)?' '+currency:unit}`).join(' · ')||'비교 수치 없음';
 }
-if(typeof module!=='undefined')module.exports={describeRule,describeValues};
+function describeState(rule){
+  if(rule.kind!=='retest')return '';
+  if(!rule.enabled)return '현재 재접근 대기 없음 · 정지 시 기존 돌파 대기를 초기화합니다.';
+  const s=rule.evaluation_state;
+  return s?.date?`${s.date} 돌파 · 고정 가격 ${s.level} ${rule.metadata?.currency||'현지 통화'} · 재접근 대기 중`:'현재 새 돌파 대기 중';
+}
+if(typeof module!=='undefined')module.exports={describeRule,describeValues,describeState};

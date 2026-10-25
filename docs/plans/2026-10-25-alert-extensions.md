@@ -7,8 +7,8 @@
 |---|---|---|
 | 1 | 명세 보완: 읽을 수 있는 규칙·이력, 운영자 상태 | 완료, 네 역할 재검토 통과 |
 | 2 | 같은 종목·거래일 AND 2~3조건 | 완료, 네 역할 통과 |
-| 3 | 돌파일 가격 고정 재접근 | 진행 중 |
-| 4 | 동일 시장·통화 상대 수익률 | 대기 |
+| 3 | 돌파일 가격 고정 재접근 | 완료, 네 역할 검토·수정 후 팀장 승인 |
+| 4 | 동일 시장·통화 상대 수익률 | 진행 중 |
 | 5 | 저장 보유자산 기반 평단·비중 | 대기 |
 | 6 | 실적·배당 일정·변경 | 대기 |
 | 7 | 한국·미국 공시 | 대기 |
@@ -27,3 +27,9 @@ Orca run `run_b05fbfd8e6aa`의 비판·가능성·외부인·확장성 4명 참�
 ## 기능 2 검증과 팀 판단
 
 동일 run에서 네 역할 모두 차단 결함 없이 통과했다. 분할 보호의 실제 작업 검증 보강을 채택해 AND 지정가격 포함 규칙에서 `needs_review`·정지·이벤트/메일 0건을 확인했다. 3조건 일치·불일치도 추가했다. 단위 54개, API/작업 29개 통과 후 확장 검사 9개 통과, Chrome의 AND 등록·모바일 확인 통과. 원문 `.team-review/extensions-f2-*.md`. 작업자 전원 회수, 누락·공급자 대체 없음. 메일 내부 매개변수 표현의 가독성은 최종 사용자 검토에서 보완한다.
+
+## Feature 3 verification
+
+Four Orca roles reviewed, no missing roles/provider substitutions. Initial findings: replay all missed state transitions separately from the five-session delivery window; invalidate sequences affected by intermediate bar corrections; re-arm on the first expired day; reflect stored state in dry-run; display current waiting state separately. All adopted. Critic, possibility and outsider follow-ups cleared their findings. Scale follow-up identified an initial warm-up mismatch in dry-run: coordinator reproduced a failing test, applied the same insufficient-data skip policy as live evaluation, and confirmed it passes. Coordinator accepts the final fix; no third review round was claimed. Reports: `.team-review/extensions-f3-*-followup.md`. All workers released.
+
+Extension tests 18 passed before follow-up; added 70-session chunk/resume and initial warm-up regressions also passed. Related jobs/extensions 33 passed; Node format 3 and Chrome passed. Historical data corrections conservatively require confirmation; no historical signal is automatically re-sent.

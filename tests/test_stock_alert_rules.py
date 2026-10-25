@@ -1,11 +1,12 @@
 import math
+from datetime import date,timedelta
 
 import pytest
 from app.alert_rules import PARAMS, evaluate_rule, minimum_bars, normalize_rule
 
 
 def bars(prices, volume=10):
-    return [{"close": x, "volume": volume} for x in prices]
+    return [{"date":str(date(2020,1,1)+timedelta(days=i)),"close": x, "volume": volume} for i,x in enumerate(prices)]
 
 
 @pytest.mark.parametrize("kind,params,prices,expected", [
