@@ -32,7 +32,8 @@ const server = http.createServer((req,res)=>{
       window.fixture=${JSON.stringify(fixture)};window.calls=[];window.watch=[];window.rules=[];window.rejectSave=false;window.rejectSymbol=null;window.loseSymbol=null;window.watchSequence=0;
       window.holdings=[{ticker:'SCHD'},{ticker:'AAPL'},{ticker:'QQQ'},{ticker:'TQQQ'}];
       window.fetch=async(url,opts={})=>{calls.push({url,...opts});await new Promise(r=>setTimeout(r,150));let data={items:[],nextCursor:null};const method=opts.method||'GET';const body=opts.body?JSON.parse(opts.body):{};
-      if(url==='/auth/session')data={user:{sub:'test-user',email:'test@example.com'}};
+      if(url==='/auth/session')data={user:{sub:'test-user',email:'test@example.com'},isOwner:true};
+      else if(url==='/api/alerts/operations')data={runs:[{digest_date:'2026-10-23',tasks:[{kind:'fetch',status:'deferred',count:2}],deliveries:[{status:'unknown',count:1}],duration_seconds:12.5,rate_limit_count:3,oldestPending:null}]};
       else if(url==='/api/alerts/settings')data={...fixture,revision:1,email:'test@example.com',consent:false,sendingEnabled:false};
       else if(url.startsWith('/api/alerts/instrument?'))data={symbol:new URL(url,'http://test').searchParams.get('symbol').trim().toUpperCase(),name:'<img src=x onerror=alert(1)>',mic:'ARCX',currency:'USD'};
       else if(url==='/api/dashboard/state')data={state:{portfolio:{positions:holdings}}};
@@ -47,6 +48,8 @@ const server = http.createServer((req,res)=>{
     assert(await run("document.getElementById('refresh').disabled"));
     await until("!document.getElementById('content').hidden && document.getElementById('loading').hidden");
     assert.equal(await run("document.getElementById('kind').options.length"),10);
+    assert(await run("document.getElementById('rule-meaning').textContent.includes('200거래일')"));
+    assert(await run("!document.getElementById('operations-panel').hidden && document.getElementById('operations').textContent.includes('자료 조회 보류: 2건') && document.getElementById('operations').textContent.includes('결과 확인 필요: 1건')"));
     await run("document.getElementById('symbol').value='SCHD'; document.getElementById('watch-form').requestSubmit()");
     await until("document.getElementById('loading').hidden");
     assert.equal(await run("watch.length"),0,'Review the instrument before saving');

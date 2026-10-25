@@ -12,6 +12,7 @@ from app.services.alert_data import (DataPending, adjusted_bars, calendar, expec
                                     fingerprint, load_daily_bars, session_close)
 from app.services.alert_email import email_configured, make_payload, send_payload
 from app.services.alert_store import database, json_value
+from app.services.alert_metrics import current as metrics_context
 
 UTC = timezone.utc
 KST = timezone(timedelta(hours=9))
@@ -161,7 +162,7 @@ def evaluate_task(task, run, token):
                 finish_task(conn, task, result, "deferred")
                 return True
             for trigger in result["triggers"]:
-                event = {"symbol": payload["symbol"], "currency": meta["currency"], "label": LABELS[payload["kind"]],
+                event = {"symbol": payload["symbol"], "currency": meta["currency"], "kind": payload["kind"], "label": LABELS[payload["kind"]],
                          "params": payload["params"], "result": result}
                 conn.execute("""INSERT INTO alert_events(id,user_id,rule_id,instrument_id,meaning_version,session_date,trigger_kind,snapshot_hash,payload)
                     VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
@@ -293,6 +294,7 @@ def send_digest(identity, run=None, token=None):
 
 
 def process_alert_run(*, now=None):
+    call_started = time.monotonic()
     now = now or utcnow()
     if os.getenv("STOCK_ALERTS_SEND_ENABLED") != "true":
         # No production run/task/event/digest or cursor mutations in dry-run mode.
@@ -311,6 +313,8 @@ def process_alert_run(*, now=None):
     if not run:
         return {"status": "busy"}
     started = time.monotonic()
+    metrics = {}
+    metrics_token = metrics_context.set(metrics)
     try:
         with database() as conn:
             tasks = conn.execute("SELECT * FROM alert_tasks WHERE run_id=%s AND status='pending' AND next_attempt_at<=now() ORDER BY kind,id", (run["id"],)).fetchall()
@@ -331,6 +335,8 @@ def process_alert_run(*, now=None):
                     fence(conn, run["id"], token)
                     # Rate limiting does not consume a data-retry attempt.
                     increment = int(exc.code != "provider_rate_limited")
+                    if exc.code == "provider_rate_limited":
+                        conn.execute("UPDATE alert_runs SET rate_limit_count=rate_limit_count+1 WHERE id=%s", (run["id"],))
                     conn.execute("""UPDATE alert_tasks SET attempts=attempts+%s,error=%s,
                         next_attempt_at=now()+(%s * interval '1 second'),
                         status=CASE WHEN NOT %s OR attempts+%s>=3 THEN 'deferred' ELSE 'pending' END WHERE id=%s""",
@@ -356,5 +362,9 @@ def process_alert_run(*, now=None):
             counts = conn.execute("SELECT status,count(*) AS n FROM alert_tasks WHERE run_id=%s GROUP BY status", (run["id"],)).fetchall()
         return {"status": "processed", "tasks": counts}
     finally:
+        metrics_context.reset(metrics_token)
         with database() as conn:
-            conn.execute("UPDATE alert_runs SET lease_until=NULL,status='waiting' WHERE id=%s AND lease_token=%s", (run["id"], token))
+            conn.execute("""UPDATE alert_runs SET lease_until=NULL,status='waiting',duration_seconds=duration_seconds+%s,
+                data_calls=data_calls+%s,data_429=data_429+%s,email_calls=email_calls+%s,email_429=email_429+%s
+                WHERE id=%s AND lease_token=%s""", (time.monotonic() - call_started, metrics.get("dataCalls",0),
+                metrics.get("data429",0),metrics.get("emailCalls",0),metrics.get("email429",0),run["id"],token))

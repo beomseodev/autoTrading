@@ -9,6 +9,7 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from svix.webhooks import Webhook, WebhookVerificationError
 
 from app.services.alert_store import database
+from app.services.alert_metrics import record
 
 
 def email_configured():
@@ -73,10 +74,13 @@ def send_payload(identity, payload):
     if not email_configured():
         raise HTTPException(503, "Resend 발신 도메인·키와 해지 설정이 필요합니다.")
     try:
+        record("emailCalls")
         response = httpx.post("https://api.resend.com/emails", json=payload,
                               headers={"Authorization": "Bearer " + os.environ["RESEND_API_KEY"],
                                        "Idempotency-Key": "stock-alerts/" + str(identity)}, timeout=20)
         if response.status_code == 429 or response.status_code >= 500:
+            if response.status_code == 429:
+                record("email429")
             try:
                 delay = min(86400, max(1, int(response.headers.get("Retry-After", "300"))))
             except ValueError:

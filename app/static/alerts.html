@@ -4,7 +4,7 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <title>종가 기준 관심종목 알림</title>
   <link rel="stylesheet" href="/static/dashboard.css"><link rel="stylesheet" href="/static/loading.css">
-  <link rel="stylesheet" href="/static/alerts.css"><script src="/static/alerts.js" defer></script>
+  <link rel="stylesheet" href="/static/alerts.css"><script src="/static/alert-format.js" defer></script><script src="/static/alerts.js" defer></script>
 </head>
 <body>
   <aside class="sidebar"><a class="brand" href="/">PORTFOLIO</a><nav aria-label="주 메뉴"><a href="/">대시보드</a><a class="active" aria-current="page" href="/alerts">관심종목 알림</a><a href="/lab">포트폴리오 실험실</a></nav></aside>
@@ -36,6 +36,7 @@
       <section class="card"><h2>등록한 규칙과 최근 판정</h2><p>등록·재개·조건 변경 전에 끝난 신호는 메일로 보내지 않습니다. 정지 기간의 신호도 소급하지 않습니다.</p><ul id="rules" class="alert-list"></ul></section>
       <section class="card"><h2>신호 이력</h2><ul id="events" class="alert-list"></ul><button id="more-events" class="button quiet" hidden>이전 신호 더 보기</button></section>
       <section class="card"><h2>일별 발송 결과</h2><p class="card-note">접수는 메일 공급자가 요청을 받았다는 뜻이며 수신함 도착과 다릅니다.</p><ul id="digests" class="alert-list"></ul><button id="more-digests" class="button quiet" hidden>이전 결과 더 보기</button></section>
+      <section id="operations-panel" class="card" hidden><h2>운영자 점검 상태</h2><p>최근 14회 점검의 작업·발송 집계이며 테스트 메일은 제외합니다. 접수와 실제 도착은 다릅니다. 처리시간은 초기화를 포함해 정상 기록된 호출의 누적 시간이며 강제 종료된 호출은 누락될 수 있습니다.</p><p id="operations-status" role="status"></p><ul id="operations" class="alert-list"></ul></section>
       <section class="card"><h2>알림 데이터 삭제</h2><p>관심종목·조건·신호와 발송 이력을 삭제하고 수신을 중지합니다. 대시보드의 보유자산·목표는 유지합니다.</p><button id="delete-account" class="button quiet">내 알림 데이터 삭제</button></section>
     </div>
   </main>

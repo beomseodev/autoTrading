@@ -23,7 +23,7 @@ function element(tag,text,className){const e=document.createElement(tag);if(text
 function button(text,action){const b=element('button',text,'button quiet');b.type='button';b.addEventListener('click',()=>action().catch(fail));return b;}
 function canonicalSymbol(symbol){return /\.K[QS]$/.test(symbol)?symbol:symbol.replaceAll('.','-');}
 function typeInfo(){return state.settings.types.find(x=>x.type===$('kind').value);}
-function fields(params){$('params').replaceChildren();Object.entries(params).forEach(([key,value])=>{const label=element('label',names[key]||key);const control=element(options[key]?'select':'input');control.dataset.param=key;control.id='param-'+key;if(options[key])options[key].forEach(([val,text])=>{const opt=element('option',text);opt.value=val;control.append(opt);});else{control.type='number';control.step=key.toLowerCase().includes('period')||key==='period'?'1':'any';control.required=true;}control.value=value;label.append(control);$('params').append(label);});$('rule-meaning').textContent=typeInfo().label+' · 선택한 종목의 현지 정규장 종가 기준 · 기간은 거래일 수입니다.';}
+function fields(params){$('params').replaceChildren();Object.entries(params).forEach(([key,value])=>{const label=element('label',names[key]||key);const control=element(options[key]?'select':'input');control.dataset.param=key;control.id='param-'+key;if(options[key])options[key].forEach(([val,text])=>{const opt=element('option',text);opt.value=val;control.append(opt);});else{control.type='number';control.step=key.toLowerCase().includes('period')||key==='period'?'1':'any';control.required=true;}control.value=value;label.append(control);$('params').append(label);});$('rule-meaning').textContent=describeRule($('kind').value,params);}
 function resetEdit(){state.edit=null;$('kind').disabled=false;$('rule-name').value='';$('cancel-edit').hidden=true;$('resolve-edit').hidden=true;$('restore-archived').checked=false;$('save-rule').textContent='선택 종목에 규칙 등록';$('rule-heading').textContent='조건 등록';fields(typeInfo().defaults);}
 function render(){
   $('watchlist').replaceChildren();
@@ -38,7 +38,7 @@ function render(){
   });
   $('rules').replaceChildren();
   if(!state.rules.length)$('rules').append(element('li','등록한 규칙이 없습니다.'));
-  state.rules.forEach(r=>{const li=element('li'),detail=element('div',`${r.symbol} · ${r.name||state.settings.types.find(x=>x.type===r.kind).label}`,'detail');detail.append(element('small',JSON.stringify(r.params)),element('small',r.enabled?'활성':'정지'),element('small','마지막 정상 평가 거래일: '+(r.last_session||'없음')),element('small',r.last_result?(statuses[r.last_result.status]||r.last_result.status)+' · '+(r.last_result.reason||''):'자료 준비 중 · 다음 점검부터 평가합니다.'));li.append(detail,button(r.enabled?'정지':'재개',async()=>{await api('/api/alerts/rules/'+r.id,'PATCH',{revision:r.revision,enabled:!r.enabled});await refresh();}),button('수정',async()=>{state.edit=r;$('kind').value=r.kind;$('kind').disabled=true;$('rule-name').value=r.name;fields(r.params);$('cancel-edit').hidden=false;$('save-rule').textContent='조건 수정 저장';$('rule-heading').textContent=r.symbol+' 조건 수정';$('rule-heading').scrollIntoView({block:'center'});$('rule-name').focus();}),button('삭제',async()=>{await api('/api/alerts/rules/'+r.id,'DELETE');await refresh();}));$('rules').append(li);});
+  state.rules.forEach(r=>{const li=element('li'),detail=element('div',`${r.symbol} · ${r.name||state.settings.types.find(x=>x.type===r.kind).label}`,'detail');detail.append(element('small',describeRule(r.kind,r.params)),element('small',r.enabled?'활성':'정지'),element('small','마지막 정상 평가 거래일: '+(r.last_session||'없음')),element('small',r.last_result?(statuses[r.last_result.status]||r.last_result.status)+' · '+(r.last_result.reason||''):'자료 준비 중 · 다음 점검부터 평가합니다.'));li.append(detail,button(r.enabled?'정지':'재개',async()=>{await api('/api/alerts/rules/'+r.id,'PATCH',{revision:r.revision,enabled:!r.enabled});await refresh();}),button('수정',async()=>{state.edit=r;$('kind').value=r.kind;$('kind').disabled=true;$('rule-name').value=r.name;fields(r.params);$('cancel-edit').hidden=false;$('save-rule').textContent='조건 수정 저장';$('rule-heading').textContent=r.symbol+' 조건 수정';$('rule-heading').scrollIntoView({block:'center'});$('rule-name').focus();}),button('삭제',async()=>{await api('/api/alerts/rules/'+r.id,'DELETE');await refresh();}));$('rules').append(li);});
 }
 async function history(kind,append=false) {
   const result=await api('/api/alerts/'+kind+(append&&state[kind]?'?cursor='+encodeURIComponent(state[kind]):''));
@@ -48,7 +48,9 @@ async function history(kind,append=false) {
     const li=element('li');
     if(kind==='events') {
       li.append(element('span',`${row.payload.symbol} · ${row.session_date} · ${row.payload.label}`));
-      li.append(element('small',row.canceled?'취소된 신호':JSON.stringify(row.payload.result.values)));
+      const kind=row.payload.kind||state.settings.types.find(t=>t.label===row.payload.label)?.type;
+      if(kind)li.append(element('small',describeRule(kind,row.payload.params)));
+      li.append(element('small',row.canceled?'취소된 신호':(row.payload.result.reason||'')+' · '+describeValues(row.payload.result.values,kind,row.payload.params,row.payload.currency)));
       if(row.correction) li.append(element('small','자료 정정: '+row.correction.reason));
     } else {
       li.append(element('span',`${row.digest_date} · ${row.kind==='test'?'테스트 · ':''}${statuses[row.status]||row.status}`));
@@ -78,8 +80,30 @@ async function refresh() {
     fields(typeInfo().defaults);
   }
   $('content').hidden=false; render();
-  await Promise.all([history('events'),history('digests')]);
+  await Promise.all([history('events'),history('digests'),operations()]);
 }
+async function operations() {
+  if(!state.isOwner)return;
+  $('operations-panel').hidden=false;
+  try {
+    const result=await api('/api/alerts/operations');
+    $('operations').replaceChildren();$('operations-status').textContent='';
+    if(!result.runs.length)$('operations-status').textContent='아직 점검 실행 기록이 없습니다.';
+    result.runs.forEach(run=>{
+      const li=element('li'),detail=element('div',run.digest_date,'detail');
+      const taskNames={fetch:'자료 조회',evaluate:'규칙 평가'},taskStatuses={done:'완료',pending:'대기',deferred:'보류'};
+      detail.append(element('small',run.tasks.map(t=>`${taskNames[t.kind]||t.kind} ${taskStatuses[t.status]||t.status}: ${t.count}건`).join(' · ')||'작업 없음'));
+      detail.append(element('small',run.deliveries.map(d=>`${statuses[d.status]||d.status}: ${d.count}건`).join(' · ')||'발송 기록 없음'));
+      detail.append(element('small',`누적 처리 ${Number(run.duration_seconds).toFixed(1)}초 · 시세 요청 ${run.data_calls||0}회 / HTTP 429 ${run.data_429||0}회 · 메일 요청 ${run.email_calls||0}회 / HTTP 429 ${run.email_429||0}회`));
+      detail.append(element('small',`시세 제한(로컬 quota 포함) ${run.rate_limit_count}회 · 가장 오래된 미처리 시작: ${run.oldestPending?new Date(run.oldestPending).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})+' (한국시간)':'없음'}`));
+      li.append(detail);$('operations').append(li);
+    });
+  } catch(error){$('operations-status').textContent='운영 상태 조회 실패: '+error.message;}
+}
+$('params').addEventListener('input',()=>{
+  const params={};document.querySelectorAll('[data-param]').forEach(input=>params[input.dataset.param]=input.tagName==='SELECT'?input.value:Number(input.value));
+  $('rule-meaning').textContent=describeRule($('kind').value,params);
+});
 $('settings-form').addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/alerts/settings','PATCH',{revision:state.settings.revision,consent:$('consent').checked});await refresh();$('status').textContent='수신 설정을 저장했습니다.';}catch(error){fail(error);}});
 $('watch-form').addEventListener('submit',async e=>{
   e.preventDefault();if(requests)return;
@@ -122,7 +146,7 @@ $('cancel-edit').addEventListener('click',resetEdit);
 $('resolve-edit').addEventListener('click',()=>{
   const latest=state.rules.find(r=>r.id===state.edit?.id);
   if(!latest) {fail(new Error('이 조건은 삭제되었습니다. 수정 취소 후 새 조건으로 등록해주세요.'));return;}
-  if(confirm('최신 조건: '+JSON.stringify(latest.params)+' / '+(latest.enabled?'활성':'정지')+'\n이를 확인한 뒤 현재 입력한 초안으로 저장을 계속할까요?')) {
+  if(confirm('최신 조건: '+describeRule(latest.kind,latest.params)+' / '+(latest.enabled?'활성':'정지')+'\n이를 확인한 뒤 현재 입력한 초안으로 저장을 계속할까요?')) {
     state.edit=latest; $('resolve-edit').hidden=true; $('status').textContent='입력을 유지했습니다. 저장 버튼으로 적용해주세요.';
   }
 });
@@ -170,4 +194,4 @@ $('holdings-form').addEventListener('submit',async e=>{
   else {$('holdings-form').hidden=true;$('status').textContent='선택한 보유 종목을 가져왔습니다.';}
 });
 $('delete-account').addEventListener('click',async()=>{if(!confirm('내 관심종목·규칙·신호·발송 이력을 삭제하고 수신을 중지할까요? 보유자산은 유지합니다.'))return;try{await api('/api/alerts/account','DELETE');state.selected.clear();resetEdit();await refresh();$('status').textContent='알림 데이터를 삭제했습니다.';}catch(error){fail(error);}});
-(async()=>{try{const session=await api('/auth/session');if(!session.user){$('login-note').hidden=false;$('refresh').hidden=true;return;}state.account=session.user.sub;await refresh();}catch(error){fail(error);}})();
+(async()=>{try{const session=await api('/auth/session');if(!session.user){$('login-note').hidden=false;$('refresh').hidden=true;return;}state.account=session.user.sub;state.isOwner=session.isOwner;await refresh();}catch(error){fail(error);}})();

@@ -13,6 +13,7 @@ import pandas as pd
 from fastapi import HTTPException
 
 from app.services.alert_store import database
+from app.services.alert_metrics import record
 
 POLICY = "raw-split-only-v1"
 MIC = {"XNAS": ("USD", "America/New_York", "XNYS"), "XNYS": ("USD", "America/New_York", "XNYS"),
@@ -64,8 +65,10 @@ def provider_get(path, params, cost=1):
         raise HTTPException(503, "관심종목 시세 공급자 설정이 필요합니다.")
     reserve_credits(cost)
     try:
+        record("dataCalls")
         response = httpx.get("https://api.twelvedata.com/" + path, params={**params, "apikey": key}, timeout=25)
         if response.status_code == 429:
+            record("data429")
             raise DataPending("provider_rate_limited", True, min(3600, int(response.headers.get("Retry-After", "60"))))
         if response.status_code >= 500:
             raise DataPending("provider_unavailable")
@@ -75,6 +78,8 @@ def provider_get(path, params, cost=1):
             raise DataPending("invalid_provider_data", False)
         if payload.get("status") == "error":
             code = int(payload.get("code", 500))
+            if code == 429:
+                record("data429")
             raise DataPending("provider_rate_limited" if code == 429 else "provider_rejected", code == 429 or code >= 500)
         return payload
     except (httpx.HTTPError, ValueError, TypeError):

@@ -15,6 +15,33 @@ from app.services.alert_store import database, sync_user, owned, lock_user, chec
 router = APIRouter()
 
 
+@router.get("/api/alerts/operations")
+def operations(request: Request):
+    from app.auth import is_owner
+    if not is_owner(request.session.get("user")):
+        raise HTTPException(403, "운영자만 확인할 수 있습니다.")
+    with database() as conn:
+        runs = conn.execute("""SELECT id,digest_date,status,cutoff,deadline,lease_until,
+            duration_seconds,rate_limit_count,data_calls,data_429,email_calls,email_429
+            FROM alert_runs ORDER BY digest_date DESC LIMIT 14""").fetchall()
+        ids = [r["id"] for r in runs]
+        days = [r["digest_date"] for r in runs]
+        tasks = conn.execute("""SELECT run_id,kind,status,count(*) AS count,
+            min(created_at) FILTER (WHERE status='pending') AS oldest FROM alert_tasks
+            WHERE run_id=ANY(%s) GROUP BY run_id,kind,status ORDER BY kind,status""", (ids,)).fetchall()
+        deliveries = conn.execute("""SELECT digest_date,status,count(*) AS count,
+            min(created_at) FILTER (WHERE status IN ('pending','sending','retryable_failed','unknown')) AS oldest
+            FROM alert_digests WHERE digest_date=ANY(%s) AND kind<>'test'
+            GROUP BY digest_date,status ORDER BY status""", (days,)).fetchall()
+        for run in runs:
+            rt = [t for t in tasks if t["run_id"] == run["id"]]
+            rd = [d for d in deliveries if d["digest_date"] == run["digest_date"]]
+            run["tasks"] = [{k:t[k] for k in ("kind","status","count")} for t in rt]
+            run["deliveries"] = [{k:d[k] for k in ("status","count")} for d in rd]
+            run["oldestPending"] = min((r["oldest"] for r in rt + rd if r["oldest"]), default=None)
+    return {"runs": runs}
+
+
 class Input(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
