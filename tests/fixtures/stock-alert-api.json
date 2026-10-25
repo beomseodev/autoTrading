@@ -169,6 +169,32 @@
         "useSavedPortfolio": false,
         "thresholdPct": 20
       }
+    },
+    {
+      "type": "earnings_event",
+      "label": "실적 일정·변경 (미국 주식)",
+      "composable": false,
+      "defaults": {
+        "daysBefore": 1
+      }
+    },
+    {
+      "type": "dividend_event",
+      "label": "배당 일정·변경 (미국)",
+      "composable": false,
+      "defaults": {
+        "daysBefore": 1,
+        "dateField": "exDate"
+      }
+    },
+    {
+      "type": "dividend_change",
+      "label": "정기 현금배당 인상·삭감 (미국)",
+      "composable": false,
+      "defaults": {
+        "direction": "both",
+        "thresholdPct": 0
+      }
     }
   ]
 }

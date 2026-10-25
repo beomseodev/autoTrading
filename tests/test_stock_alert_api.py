@@ -24,7 +24,7 @@ def db(monkeypatch):
     monkeypatch.setenv("ALERT_DATABASE_URL", url)
     migrate(url)
     with database() as conn:
-        conn.execute("TRUNCATE alert_users,alert_instruments,alert_runs,alert_provider_credits,alert_webhook_receipts CASCADE")
+        conn.execute("TRUNCATE alert_users,alert_instruments,alert_runs,alert_provider_credits,alert_webhook_receipts,alert_information_cache,alert_external_credits CASCADE")
     monkeypatch.setattr("app.stock_alerts.resolve_instrument", lambda symbol: {**META, "symbol": symbol.upper()})
     return url
 

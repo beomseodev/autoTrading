@@ -30,9 +30,10 @@ const server = http.createServer((req,res)=>{
     const fixture=JSON.parse(fs.readFileSync('tests/fixtures/stock-alert-api.json','utf8'));
     await send('Page.addScriptToEvaluateOnNewDocument',{source:`
       window.fixture=${JSON.stringify(fixture)};window.calls=[];window.watch=[];window.rules=[];window.rejectSave=false;window.rejectSymbol=null;window.loseSymbol=null;window.watchSequence=0;
-      window.holdings=[{ticker:'SCHD'},{ticker:'AAPL'},{ticker:'QQQ'},{ticker:'TQQQ'}];
+      window.holdings=[{ticker:'SCHD'},{ticker:'AAPL'},{ticker:'QQQ'},{ticker:'TQQQ'}];window.events=[];
       window.fetch=async(url,opts={})=>{calls.push({url,...opts});await new Promise(r=>setTimeout(r,150));let data={items:[],nextCursor:null};const method=opts.method||'GET';const body=opts.body?JSON.parse(opts.body):{};
       if(url==='/auth/session')data={user:{sub:'test-user',email:'test@example.com'},isOwner:true};
+      else if(url==='/api/alerts/events')data={items:events,nextCursor:null};
       else if(url==='/api/alerts/operations')data={runs:[{digest_date:'2026-10-23',tasks:[{kind:'fetch',status:'deferred',count:2}],deliveries:[{status:'unknown',count:1}],duration_seconds:12.5,rate_limit_count:3,oldestPending:null}]};
       else if(url==='/api/alerts/settings')data={...fixture,revision:1,email:'test@example.com',consent:false,sendingEnabled:false};
       else if(url.startsWith('/api/alerts/instrument?'))data={symbol:new URL(url,'http://test').searchParams.get('symbol').trim().toUpperCase(),name:'<img src=x onerror=alert(1)>',mic:'ARCX',currency:'USD'};
@@ -94,6 +95,20 @@ const server = http.createServer((req,res)=>{
     await until("rules.length===1 && document.getElementById('loading').hidden");
     assert.equal(await run("rules[0].params.useSavedPortfolio"),true);
     await run("document.querySelectorAll('#rules button')[2].click()");
+    await until("rules.length===0 && document.getElementById('loading').hidden");
+    await run("document.getElementById('kind').value='dividend_event';document.getElementById('kind').dispatchEvent(new Event('change'));document.getElementById('param-dateField').value='payDate';document.getElementById('rule-form').requestSubmit()");
+    await until("rules.length===1 && document.getElementById('loading').hidden");
+    assert.equal(await run("rules[0].params.dateField"),'payDate');
+    assert(await run("document.getElementById('rules').textContent.includes('배당 지급일')"));
+    await run("events=[{session_date:'2026-10-23',payload:{symbol:'SCHD',label:'배당 일정',kind:'dividend_event',params:rules[0].params,information:{title:'일정 사전 알림',details:'지급일 2026-10-30 · 잠정 <img src=x>',sourceUrl:'https://www.benzinga.com/dividends'},result:{reason:'일정 확인',values:{}}}}];document.getElementById('refresh').click()");
+    await until("document.getElementById('loading').hidden");
+    assert(await run("document.getElementById('events').textContent.includes('잠정') && !document.getElementById('events').textContent.includes('비교 수치 없음')"));
+    assert.equal(await run("document.querySelectorAll('#events img').length"),0);
+    assert.equal(await run("document.querySelector('#events a').href"),'https://www.benzinga.com/dividends');
+    await run("events[0].canceled=true;document.getElementById('refresh').click()");
+    await until("document.getElementById('loading').hidden");
+    assert(await run("document.getElementById('events').textContent.includes('설정 변경·정지로 취소된 신호')"));
+    await run("events=[];document.querySelectorAll('#rules button')[2].click()");
     await until("rules.length===0 && document.getElementById('loading').hidden");
     await run("document.getElementById('kind').value='price_ma_cross';document.getElementById('kind').dispatchEvent(new Event('change'));document.getElementById('rule-form').requestSubmit()");
     await until("document.querySelectorAll('#rules button').length===3 && document.getElementById('loading').hidden");

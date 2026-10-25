@@ -10,8 +10,8 @@
 | 3 | 돌파일 가격 고정 재접근 | 완료, 네 역할 검토·수정 후 팀장 승인 |
 | 4 | 동일 시장·통화 상대 수익률 | 완료, 네 역할 검토·수정 후 팀장 승인 |
 | 5 | 저장 보유자산 기반 평단·비중 | 완료, 네 역할 재검토 통과 |
-| 6 | 실적·배당 일정·변경 | 진행 중 |
-| 7 | 한국·미국 공시 | 대기 |
+| 6 | 실적·배당 일정·변경 | 완료, 네 역할 검토·수정 후 팀장 승인 |
+| 7 | 한국·미국 공시 | 진행 중 |
 | 8 | 채널별 일간·주간 | 대기 |
 | 9 | 웹 푸시 | 대기 |
 | 최종 | 전체 회귀·부하·실사용자 흐름 리뷰 | 대기 |
@@ -47,3 +47,13 @@ All four Orca roles reviewed and rechecked the implementation; all follow-ups re
 Conflicting Forex daily-bar timezone documentation led to replacing the daily-bar assumption with the documented historical `/exchange_rate` contract: explicit UTC date/time, symbol/rate/timestamp validation, prior completed UTC weekday end. References: https://twelvedata.com/docs and https://support.twelvedata.com/en/articles/5745849-timezones. Current and preceding FX points are rechecked; older FX corrections require a revision feed and are not guaranteed. Actual contracted API access and delivery activation remain outside this development scope.
 
 Full Python before review fixes: 313 passed / load test skipped; Chrome passed. Related jobs/extensions after fixes: 51 passed. Latest holdings suite: 17 passed, including account paths, five financial edit reset cases, dependency recovery, data sharing, previous-date corrections, cash-inclusive weight crosses, frozen delivery cancellation and FX boundaries.
+
+## Feature 6 verification
+
+All four Orca roles independently reviewed and followed up, no missing roles/provider substitutions, all workers released. Reports: `.team-review/extensions-f6-*-followup.md`. Adopted findings: isolate calendar evidence from OHLC corrections; retain prior dividend and split evidence in comparison versions; recover missing comparison inputs; compare decimal thresholds exactly; display earnings time/period and settings-canceled information events; process multiple persisted pages within the existing time budget. Frozen unsent digests now revalidate event corrections before delivery.
+
+Possibility and scale follow-ups cleared required changes. Critic and outsider follow-ups found a remaining stale-current-dividend recovery gap. Coordinator reproduced the failure, separated observed versions from completed comparisons, and verified first recovery emits once while previously evaluated current/prior stale round trips do not duplicate or invalidate the evidence. Coordinator accepts this final fix; no third team-review round is claimed.
+
+Before review fixes: full Python 333 passed / one load test skipped, Node 42 passed, Chrome passed. Related calendar/jobs tests after primary fixes: 35 passed. Final calendar suite: 23 passed, including 9,000 removals plus terminal empty page through the actual cron, prior-only correction DB updates, relevant split corrections, threshold boundaries, dry-run parity, and stale recovery. Updated Chrome passed with canceled information history checks.
+
+Benzinga contracts and supported US instruments are documented in `docs/stock-alerts-operations.md`. No paid account/API/email was activated. Direct provider docs do not specify the earnings time zone, so the UI preserves the supplied time and directs users to confirm the zone at source. Final load verification must include calendar/dividend comparisons, shared removal data and correction history; actual licensed coverage remains an operational integration check.

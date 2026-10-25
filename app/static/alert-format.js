@@ -5,6 +5,9 @@ function describeRule(kind,p) {
   const direction={up:'상향 돌파',down:'하향 돌파',both:'상향 또는 하향 돌파'}[p.direction]||'';
   const ma=`${p.period}거래일 ${p.average==='ema'?'지수':'단순'}이동평균`;
   const descriptions={
+    earnings_event:`미국 일반주 실적 발표일 ${p.daysBefore}일 전 아침 알림과 추적 중인 일정 변경·취소. 공급자의 현지 날짜이며 잠정 일정은 따로 표시합니다. ETF·한국 종목은 지원하지 않습니다.`,
+    dividend_event:`미국 종목 ${p.dateField==='payDate'?'배당 지급일':'배당락일'} ${p.daysBefore}일 전 아침 알림과 추적 중인 일정 변경·취소. 공급자의 현지 날짜이며 잠정 일정은 따로 표시합니다. 한국 종목은 지원하지 않습니다.`,
+    dividend_change:`미국 종목의 확정 정기 현금배당을 직전 같은 통화·지급 주기와 비교해 ${p.thresholdPct}% 이상 ${p.direction==='up'?'인상':p.direction==='down'?'삭감':'인상·삭감'} 시 알립니다. 미래 배당락 일정 중 등록 이후 확인된 변경만 비교하며 분할이 끼면 보류합니다.`,
     holding_return:`이 계정의 저장 평단 대비 가격 수익률이 ${p.thresholdPct}%를 ${direction}한 점검일. 현금배당·수수료 제외. 첫 평가·보유 내역 변경·재개 시 비교 기준을 초기화합니다. 분할 시 수량·평단 확인 후 재개가 필요합니다.`,
     holding_weight:`이 계정의 현금을 포함한 저장 총자산 중 종목 비중이 ${p.thresholdPct}%를 ${direction}한 점검일. 각 시장의 최근 확정 종가와 직전 UTC 평일 말 시점에 조회한 환율을 사용합니다. 첫 평가·보유 내역 변경·재개 시 비교 기준을 초기화합니다.`,
     relative_performance:`최근 ${p.period}거래일 가격 수익률에서 ${p.benchmark} 수익률을 뺀 차이가 ${p.thresholdPct}%p를 ${direction}한 날 (같은 시장·통화, 분할 조정·현금배당 제외)`,

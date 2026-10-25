@@ -80,3 +80,12 @@ Chrome 검사는 Windows의 기본 Chrome 실행 경로를 사용한다. 화면 
 사건/본문은 180일, 중복 방지 키는 400일 보존 후 정리한다. 사용자 알림 삭제는 관심종목·규칙·이벤트·메일 본문과 주소를 삭제하고 legacy 전환용 최소 사용자 표식을 보존한다. 공유 시세와 기존 Blob 자산은 삭제하지 않는다.
 
 문제가 생기면 `STOCK_ALERTS_SEND_ENABLED=false`로 변경하고 신규 Cron을 중지한다. 원장과 기존 자산은 보존한다. unknown은 Resend 로그에서 기존 멱등 키·접수ID로 확인한 뒤 운영자가 판단한다. 새 키로 무조건 재전송하지 않는다.
+# 실적·배당 일정
+
+선택 기능: `BENZINGA_API_KEY`와 계약상 분당 요청 수 `BENZINGA_REQUESTS_PER_MINUTE`를 설정한다. 실적은 미국 USD 일반주, 배당은 미국 USD 일반주·ETF를 지원한다. 한국 일정과 ETF 실적은 등록 단계에서 지원 불가를 표시한다. 공급자 키·권한·조회 실패는 보류이며 정상 무신호와 구분한다. 운영 발송 활성화와 별개로 공급자 라이선스·종목 커버리지를 확인해야 한다.
+
+실적 `/api/v2.1/calendar/earnings`, 배당 `/api/v2.2/calendar/dividends`, 삭제 `/api/v2.1/calendar-removed/` 계약을 사용한다. 종목·종류별 조회와 종류별 삭제 조회는 사용자 간 공유하고 1,000행 단위 페이지 진행을 저장한다. 공급자 이벤트 ID와 내용 버전으로 중복을 막으며 응답 누락만으로 취소를 추정하지 않는다. 누락된 일정·비교 구간 분할은 보류한다. 삭제 기록은 400일 보존한다.
+
+알림은 공급자 현지 날짜를 기준으로 지정한 달력일 전 한국시간 아침에 점검한다. 날짜/내용 변경·삭제는 이미 추적하던 일정에서만 알린다. 인상·삭감은 등록 이후 갱신된 미래 배당락일의 확정 정기 현금배당을 직전 같은 통화·주기의 배당과 비교한다. 특별배당·분할 전후 금액은 비교하지 않는다. 일정은 과거 400일~미래 366일의 공급자 조회 범위이며 실제 계좌의 배당 수령 여부를 판정하지 않는다.
+
+계약 근거: [실적](https://docs.benzinga.com/api-reference/calendar-api/get-earnings), [배당](https://docs.benzinga.com/api-reference/calendar-api/get-dividends), [삭제](https://docs.benzinga.com/api-reference/calendar-api/get-removed). 실제 유료 계정 호출은 개발 검증에 포함하지 않았다.

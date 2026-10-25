@@ -7,6 +7,9 @@ const options = {average:[['sma','단순이동평균 SMA'],['ema','지수이동�
 names.windowSessions='대기 기간 (거래일)';names.tolerancePct='재접근 허용폭 (%)';
 names.benchmark='비교 종목 코드 (같은 시장·통화)';
 names.useSavedPortfolio='이 계정에 저장된 보유자산을 연결합니다 (직접 선택)';
+names.daysBefore='일정 며칠 전 (달력일)';names.dateField='배당 알림 기준일';
+options.dateField=[['exDate','배당락일'],['payDate','지급일']];
+const reasons={calendar_not_configured:'일정 공급자 연결이 설정되지 않았습니다.',calendar_quota_not_configured:'일정 공급자 조회 한도가 설정되지 않았습니다.',calendar_unavailable:'일정 공급자 조회 실패',calendar_unsupported:'지원하지 않는 종목·일정입니다.',calendar_snapshot_pending:'일정 자료 준비 중',invalid_calendar_data:'일정 자료 형식 검증 실패',invalid_calendar_response:'일정 응답 검증 실패',invalid_calendar_removal:'일정 취소 자료 검증 실패'};
 const statuses = {signal:'새 신호',no_signal:'정상 무신호',no_new_session:'휴장 또는 활성화 후 새 거래일 없음',insufficient_data:'계산 자료 부족',invalid_data:'자료 검증 실패',needs_review:'조건 재확인 필요',pending:'발송 대기',sending:'전송 중',accepted:'공급자 접수',delivered:'배달 확인',no_signals:'새 신호 없음',unknown:'결과 확인 필요',retryable_failed:'발송 재시도 대기',permanent_failed:'발송 실패',canceled:'설정 변경으로 취소',bounced:'반송',complained:'스팸신고',suppressed:'발송 중지'};
 statuses.deferred='조회 실패·자료 보류, 신호 여부 미확인';
 statuses.missed_window='발송 시간 내 미접수';
@@ -86,7 +89,7 @@ function render(){
   });
   $('rules').replaceChildren();
   if(!state.rules.length)$('rules').append(element('li','등록한 규칙이 없습니다.'));
-  state.rules.forEach(r=>{const li=element('li'),detail=element('div',`${r.symbol} · ${r.name||state.settings.types.find(x=>x.type===r.kind).label}`,'detail');detail.append(element('small',describeRule(r.kind,r.params)),element('small',describeState(r)),element('small',r.enabled?'활성':'정지'),element('small','마지막 정상 평가일: '+(r.last_session||'없음')),element('small',r.last_result?(statuses[r.last_result.status]||r.last_result.status)+' · '+(r.last_result.reason||''):'자료 준비 중 · 다음 점검부터 평가합니다.'));li.append(detail,button(r.enabled?'정지':'재개',async()=>{await api('/api/alerts/rules/'+r.id,'PATCH',{revision:r.revision,enabled:!r.enabled});await refresh();}),button('수정',async()=>{state.edit=r;$('kind').value=r.kind;$('kind').disabled=true;$('rule-name').value=r.name;fields(r.params);$('cancel-edit').hidden=false;$('save-rule').textContent='조건 수정 저장';$('rule-heading').textContent=r.symbol+' 조건 수정';$('rule-heading').scrollIntoView({block:'center'});$('rule-name').focus();}),button('삭제',async()=>{await api('/api/alerts/rules/'+r.id,'DELETE');await refresh();}));$('rules').append(li);});
+  state.rules.forEach(r=>{const li=element('li'),detail=element('div',`${r.symbol} · ${r.name||state.settings.types.find(x=>x.type===r.kind).label}`,'detail');detail.append(element('small',describeRule(r.kind,r.params)),element('small',describeState(r)),element('small',r.enabled?'활성':'정지'),element('small','마지막 정상 평가일: '+(r.last_session||'없음')),element('small',r.last_result?(statuses[r.last_result.status]||r.last_result.status)+' · '+(reasons[r.last_result.reason]||r.last_result.reason||''):'자료 준비 중 · 다음 점검부터 평가합니다.'));li.append(detail,button(r.enabled?'정지':'재개',async()=>{await api('/api/alerts/rules/'+r.id,'PATCH',{revision:r.revision,enabled:!r.enabled});await refresh();}),button('수정',async()=>{state.edit=r;$('kind').value=r.kind;$('kind').disabled=true;$('rule-name').value=r.name;fields(r.params);$('cancel-edit').hidden=false;$('save-rule').textContent='조건 수정 저장';$('rule-heading').textContent=r.symbol+' 조건 수정';$('rule-heading').scrollIntoView({block:'center'});$('rule-name').focus();}),button('삭제',async()=>{await api('/api/alerts/rules/'+r.id,'DELETE');await refresh();}));$('rules').append(li);});
 }
 async function history(kind,append=false) {
   const result=await api('/api/alerts/'+kind+(append&&state[kind]?'?cursor='+encodeURIComponent(state[kind]):''));
@@ -98,7 +101,12 @@ async function history(kind,append=false) {
       li.append(element('span',`${row.payload.symbol} · ${row.session_date} · ${row.payload.label}`));
       const kind=row.payload.kind||state.settings.types.find(t=>t.label===row.payload.label)?.type;
       if(kind)li.append(element('small',describeRule(kind,row.payload.params)));
-      li.append(element('small',row.canceled?'취소된 신호':(row.payload.result.reason||'')+' · '+describeValues(row.payload.result.values,kind,row.payload.params,row.payload.currency)));
+      if(row.payload.information){
+        if(row.canceled)li.append(element('small','설정 변경·정지로 취소된 신호'));
+        const info=row.payload.information;li.append(element('small',info.title+' · '+info.details));
+        const link=element('a','출처 확인');
+        try{const url=new URL(info.sourceUrl);if(url.protocol==='https:'&&url.hostname==='www.benzinga.com'){link.href=url.href;link.target='_blank';link.rel='noopener noreferrer';li.append(link);}}catch{}
+      }else li.append(element('small',row.canceled?'취소된 신호':(row.payload.result.reason||'')+' · '+describeValues(row.payload.result.values,kind,row.payload.params,row.payload.currency)));
       (row.payload.result.conditions||[]).forEach(c=>li.append(element('small',describeRule(c.type,c.params)+' · '+describeValues(c.result.values,c.type,c.params,row.payload.currency))));
       if(row.correction) li.append(element('small','자료 정정: '+row.correction.reason));
     } else {
@@ -124,6 +132,7 @@ async function refresh() {
   $('email').textContent='수신 주소: '+settings.email;
   $('consent').checked=settings.consent;
   $('delivery-note').textContent=settings.suppressed?'발송 중지: '+settings.suppressed:settings.sendingEnabled?'운영 발송이 활성화되어 있습니다.':'실제 메일 발송은 아직 꺼져 있습니다. 조건을 저장할 수 있습니다.';
+  if(!settings.calendarConfigured)$('delivery-note').textContent+=' 실적·배당 일정 공급자 연결은 설정되지 않았습니다.';
   if(first) {
     settings.types.forEach(info=>{const opt=element('option',info.label);opt.value=info.type;$('kind').append(opt);});
     fields(typeInfo().defaults);

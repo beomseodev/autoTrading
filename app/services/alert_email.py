@@ -47,6 +47,10 @@ def make_payload(user, day, events, deferred=0, legacy=None, test=False):
     lines = ["종가 기준 관심종목 알림", "한국시간 발송일: " + str(day), ""]
     for event in events:
         payload = event["payload"]
+        if payload.get('information'):
+            info=payload['information']
+            lines.extend([f"{payload['symbol']} · {payload['label']} · {info['title']}",info['details'],'출처: '+info['sourceUrl'],''])
+            continue
         direction = {"up": "상향", "down": "하향", "volume": "거래량 급증", "drawdown": "낙폭 진입"}.get(event["trigger_kind"], event["trigger_kind"])
         if payload.get('kind') in ('holding_return','holding_weight'):
             p,v=payload['params'],payload['result']['values']

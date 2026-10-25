@@ -167,6 +167,23 @@ PARAMS.update(holding_return=HoldingReturn,holding_weight=HoldingWeight)
 LABELS.update(holding_return='저장 평단 대비 수익률',holding_weight='저장 총자산 대비 보유 비중')
 
 
+class CalendarReminder(Params):
+    daysBefore:int=Field(1,ge=0,le=30,strict=True)
+
+
+class DividendReminder(CalendarReminder):
+    dateField:Literal['exDate','payDate']='exDate'
+
+
+class DividendChange(Direction):
+    thresholdPct:float=Field(0,ge=0,le=10000)
+
+
+CALENDAR_TYPES=('earnings_event','dividend_event','dividend_change')
+PARAMS.update(earnings_event=CalendarReminder,dividend_event=DividendReminder,dividend_change=DividendChange)
+LABELS.update(earnings_event='실적 일정·변경 (미국 주식)',dividend_event='배당 일정·변경 (미국)',dividend_change='정기 현금배당 인상·삭감 (미국)')
+
+
 def contains_price_rule(kind, params):
     return kind in ("price_cross","retest") or (kind == "all_of" and any(c["type"] == "price_cross" for c in params["conditions"]))
 
@@ -200,6 +217,7 @@ def evaluate_rule(kind, params, bars, *, state=None, session_age=None):
     p = normalize_rule(kind, params)
     result = {"status": "insufficient_data", "triggers": [], "values": {}, "reason": "계산 자료 부족"}
     if kind in HOLDING_TYPES:return {**result,'reason':'계정에 저장한 보유자산 평가가 필요합니다.'}
+    if kind in CALENDAR_TYPES:return {**result,'reason':'일정 공급자 자료가 필요합니다.'}
     if len(bars) < minimum_bars(kind, p):
         return result
     if kind == "retest":

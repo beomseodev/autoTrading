@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import pandas as pd
 from fastapi import HTTPException
 
-from app.alert_rules import evaluate_rule, LABELS, contains_price_rule, minimum_bars, HOLDING_TYPES
+from app.alert_rules import evaluate_rule, LABELS, contains_price_rule, minimum_bars, HOLDING_TYPES, CALENDAR_TYPES
 from app.services.alert_data import (DataPending, adjusted_bars, calendar, expected_session,
                                     fingerprint, load_daily_bars, session_close)
 from app.services.alert_email import email_configured, make_payload, send_payload
@@ -37,6 +37,8 @@ def initialize(now):
     with database() as conn:
         conn.execute("DELETE FROM alert_runs WHERE created_at<now()-interval '400 days'")
         conn.execute("DELETE FROM alert_provider_credits WHERE minute<now()-interval '2 days'")
+        conn.execute("DELETE FROM alert_external_credits WHERE minute<now()-interval '2 days'")
+        conn.execute("DELETE FROM alert_information_cache WHERE checked_at<now()-interval '400 days'")
         conn.execute("DELETE FROM alert_webhook_receipts WHERE created_at<now()-interval '400 days'")
         conn.execute("DELETE FROM alert_events WHERE created_at<now()-interval '400 days'")
         conn.execute("DELETE FROM alert_digests WHERE created_at<now()-interval '400 days'")
@@ -65,6 +67,10 @@ def initialize(now):
                            for k, v in rule.items()}
                 conn.execute("""INSERT INTO alert_tasks(id,run_id,kind,target_id,payload) VALUES(%s,%s,'evaluate',%s,%s)
                     ON CONFLICT DO NOTHING""", (uuid4(), run_id, rule["id"], json_value(payload)))
+                if rule['kind'] in CALENDAR_TYPES:
+                    from app.services.alert_calendar import enqueue
+                    enqueue(conn,rule,run_id)
+                    if rule['kind']!='dividend_change':continue
                 conn.execute("""INSERT INTO alert_tasks(id,run_id,kind,target_id,payload) VALUES(%s,%s,'fetch',%s,%s)
                     ON CONFLICT DO NOTHING""", (uuid4(), run_id, rule["instrument_id"], json_value(rule["metadata"])))
                 if rule["benchmark_instrument_id"]:
@@ -123,6 +129,11 @@ def mark_corrections(conn, instrument_id, cached, snapshot, new_hash):
     events = conn.execute("""SELECT e.*,r.kind FROM alert_events e JOIN alert_rules r ON r.id=e.rule_id
         WHERE (e.instrument_id=%s OR e.payload->>'benchmarkId'=%s OR e.payload->'sourceIds' ? %s) AND e.created_at>=now()-interval '180 days'""", (instrument_id,str(instrument_id),str(instrument_id))).fetchall()
     for event in events:
+        if event['kind'] in CALENDAR_TYPES:
+            info=event['payload'].get('information',{})
+            if event['kind']=='dividend_change' and actions!=old['splits'] and info.get('comparisonDate') and any(info['comparisonDate']<s['date']<=info['date'] for s in actions+old['splits']):
+                conn.execute('UPDATE alert_events SET correction=%s WHERE id=%s',(json_value({'reason':'배당 비교 구간 분할 자료 정정'}),event['id']))
+            continue
         if event['kind'] in HOLDING_TYPES:
             dates=list(event['payload']['result']['state']['dates'].values())+list(event['payload']['result'].get('previousDates',{}).values())
             if changed_days.intersection(dates):
@@ -163,6 +174,9 @@ def evaluation_bars(rule, snapshot, reference, day):
 
 def evaluate_task(task, run, token,portfolio_context=None):
     payload = task["payload"]
+    if payload['kind'] in CALENDAR_TYPES:
+        from app.services.alert_calendar import evaluate_task as evaluate_calendar_task
+        return evaluate_calendar_task(task,run,token)
     if payload['kind'] in HOLDING_TYPES:
         from app.services.alert_holdings import evaluate_task as evaluate_holding_task
         return evaluate_holding_task(task,run,token,portfolio_context)
@@ -328,7 +342,7 @@ def prepare_digests(run, token, now, started):
 
 
 def calendar_from_event(event, run):
-    if event['payload'].get('kind') in HOLDING_TYPES:
+    if event['payload'].get('kind') in HOLDING_TYPES+CALENDAR_TYPES:
         return range(max(0,(run['digest_date']-event['session_date']).days-2))
     meta = event["metadata"]
     target = expected_session(meta, run["cutoff"])
@@ -355,6 +369,9 @@ def send_digest(identity, run=None, token=None):
             return
         payload = row["payload"]
         valid = portfolio_valid and user and user["consent"] and not user["suppressed"] and user["email"] == payload["email"] and user["unsubscribe_version"] == payload["unsubscribeVersion"]
+        event_ids=payload.get('eventIds',[])
+        live=conn.execute('SELECT count(*) AS n FROM alert_events WHERE id=ANY(%s::uuid[]) AND user_id=%s AND NOT canceled AND correction IS NULL',(event_ids,row['user_id'])).fetchone()['n']
+        valid=valid and live==len(event_ids)
         for rule_id, version in payload["rules"].items():
             if not conn.execute("SELECT id FROM alert_rules WHERE id=%s AND user_id=%s AND enabled AND NOT archived AND meaning_version=%s", (rule_id, row["user_id"], version)).fetchone():
                 valid = False
@@ -399,6 +416,14 @@ def process_alert_run(*, now=None):
                 from app.services.alert_holdings import dry_result
                 try:status=dry_result(rule,now)['status']
                 except (HTTPException,DataPending,ValueError):status='data_pending'
+            if rule['kind'] in CALENDAR_TYPES:
+                from app.services.alert_calendar import read_items,evaluate_calendar
+                try:
+                    with database() as conn:items=read_items(conn,rule,{'digest_date':now.astimezone(KST).date()})
+                    if rule['kind']=='dividend_change' and (not rule['snapshot'] or rule['snapshot']['target']!=str(expected_session(rule['metadata'],now))):raise DataPending('calendar_snapshot_pending')
+                    result=evaluate_calendar(rule['kind'],rule['params'],items,rule['evaluation_state'],now.astimezone(KST).date(),rule['activated_at'],splits=rule['snapshot']['splits'] if rule['snapshot'] else ())
+                    status='data_pending' if result['pending'] else 'signal' if result['events'] else 'no_signal'
+                except DataPending:status='data_pending'
             if rule["kind"]=="retest" and rule["snapshot"]:
                 snap=rule["snapshot"]
                 pending=[b["date"] for b in snap["raw"] if (not rule["last_session"] or b["date"]>str(rule["last_session"]))
@@ -440,14 +465,21 @@ def process_alert_run(*, now=None):
             except DataPending as exc:contexts[str(owner['id'])]=exc
         with database() as conn:
             tasks = conn.execute("SELECT * FROM alert_tasks WHERE run_id=%s AND status='pending' AND next_attempt_at<=now() ORDER BY kind,id", (run["id"],)).fetchall()
-        for task in sorted(tasks, key=lambda x: x["kind"] != "fetch"):
+        for task in sorted(tasks, key=lambda x: not x['kind'].startswith('fetch')):
             if time.monotonic() - started > 150:
                 break
             try:
-                if task["kind"] == "fetch":
+                if task['kind'].startswith('fetch'):
                     if now >= run["cutoff"] + timedelta(minutes=45):
                         continue
-                    fetch_task(task, run, token, now)
+                    if task['kind']=='fetch':fetch_task(task, run, token, now)
+                    else:
+                        from app.services.alert_calendar import fetch_task as fetch_calendar
+                        fetch_calendar(task,run,token)
+                        while time.monotonic()-started<120:
+                            with database() as conn:task=conn.execute('SELECT * FROM alert_tasks WHERE id=%s',(task['id'],)).fetchone()
+                            if task['status']!='pending':break
+                            fetch_calendar(task,run,token)
                 else:
                     if task['payload']['kind'] in HOLDING_TYPES:
                         evaluate_task(task,run,token,portfolio_context=contexts.get(task['payload']['user_id']))

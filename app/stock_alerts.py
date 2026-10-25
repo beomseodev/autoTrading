@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.alert_rules import PARAMS, LABELS, CORE_TYPES, HOLDING_TYPES, normalize_rule
+from app.alert_rules import PARAMS, LABELS, CORE_TYPES, HOLDING_TYPES, CALENDAR_TYPES, normalize_rule
 from app.services.alert_data import resolve_instrument
 from app.services.alert_store import database, sync_user, owned, lock_user, check_revision, json_value
 
@@ -108,6 +108,7 @@ def settings(request: Request):
     return {"email": u["email"], "consent": u["consent"], "revision": u["revision"],
             "suppressed": u["suppressed"], "sendTime": "한국시간 오전 8시대 · 새 신호가 있는 날만",
             "sendingEnabled": os.getenv("STOCK_ALERTS_SEND_ENABLED") == "true",
+            "calendarConfigured": bool(os.getenv('BENZINGA_API_KEY') and os.getenv('BENZINGA_REQUESTS_PER_MINUTE')),
             "types": [{"type": k, "label": LABELS[k], "composable": k in CORE_TYPES, "defaults": normalize_rule(k, {"price": 100} if k == "price_cross" else {})} for k in PARAMS]}
 
 
@@ -211,6 +212,10 @@ def add_rules(payload: RuleInput, request: Request):
         for instrument in payload.instrumentIds:
             if not conn.execute("SELECT id FROM alert_watchlist WHERE user_id=%s AND instrument_id=%s AND NOT archived", (u["id"], instrument)).fetchone():
                 raise HTTPException(404, "본인 관심종목을 선택해주세요.")
+            if payload.type in CALENDAR_TYPES:
+                from app.services.alert_calendar import supported
+                meta=conn.execute('SELECT metadata FROM alert_instruments WHERE id=%s',(instrument,)).fetchone()['metadata']
+                if not supported(payload.type,meta):raise HTTPException(422,'일정은 미국 USD 종목만 지원하며, ETF 실적 발표는 지원하지 않습니다.')
             reference_id=register_reference(conn,reference,instrument)
             existing = conn.execute("SELECT * FROM alert_rules WHERE user_id=%s AND instrument_id=%s AND fingerprint=%s FOR UPDATE",
                                     (u["id"], instrument, rule_hash(payload.type, payload.params))).fetchone()
