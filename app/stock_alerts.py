@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.alert_rules import PARAMS, LABELS, normalize_rule
+from app.alert_rules import PARAMS, LABELS, CORE_TYPES, normalize_rule
 from app.services.alert_data import resolve_instrument
 from app.services.alert_store import database, sync_user, owned, lock_user, check_revision, json_value
 
@@ -97,7 +97,7 @@ def settings(request: Request):
     return {"email": u["email"], "consent": u["consent"], "revision": u["revision"],
             "suppressed": u["suppressed"], "sendTime": "한국시간 오전 8시대 · 새 신호가 있는 날만",
             "sendingEnabled": os.getenv("STOCK_ALERTS_SEND_ENABLED") == "true",
-            "types": [{"type": k, "label": LABELS[k], "defaults": normalize_rule(k, {"price": 100} if k == "price_cross" else {})} for k in PARAMS]}
+            "types": [{"type": k, "label": LABELS[k], "composable": k in CORE_TYPES, "defaults": normalize_rule(k, {"price": 100} if k == "price_cross" else {})} for k in PARAMS]}
 
 
 @router.patch("/api/alerts/settings")

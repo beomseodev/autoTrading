@@ -7,7 +7,8 @@
         "direction": "both",
         "average": "sma",
         "period": 200
-      }
+      },
+      "composable": true
     },
     {
       "type": "ma_cross",
@@ -17,7 +18,8 @@
         "average": "sma",
         "shortPeriod": 50,
         "longPeriod": 200
-      }
+      },
+      "composable": true
     },
     {
       "type": "price_cross",
@@ -25,7 +27,8 @@
       "defaults": {
         "direction": "both",
         "price": 100.0
-      }
+      },
+      "composable": true
     },
     {
       "type": "daily_change",
@@ -33,7 +36,8 @@
       "defaults": {
         "direction": "both",
         "thresholdPct": 5
-      }
+      },
+      "composable": true
     },
     {
       "type": "rsi_cross",
@@ -42,7 +46,8 @@
         "direction": "down",
         "period": 14,
         "level": 30
-      }
+      },
+      "composable": true
     },
     {
       "type": "range_breakout",
@@ -50,7 +55,8 @@
       "defaults": {
         "direction": "both",
         "period": 252
-      }
+      },
+      "composable": true
     },
     {
       "type": "volume_spike",
@@ -58,7 +64,8 @@
       "defaults": {
         "period": 20,
         "multiple": 2
-      }
+      },
+      "composable": true
     },
     {
       "type": "macd_cross",
@@ -69,7 +76,8 @@
         "slowPeriod": 26,
         "signalPeriod": 9,
         "crossMode": "signal"
-      }
+      },
+      "composable": true
     },
     {
       "type": "bollinger_cross",
@@ -78,7 +86,8 @@
         "period": 20,
         "stddev": 2,
         "event": "upper_exit"
-      }
+      },
+      "composable": true
     },
     {
       "type": "drawdown_cross",
@@ -86,7 +95,32 @@
       "defaults": {
         "period": 60,
         "thresholdPct": 10
-      }
+      },
+      "composable": true
+    },
+    {
+      "type": "all_of",
+      "label": "같은 날 모든 조건 충족 (AND)",
+      "defaults": {
+        "conditions": [
+          {
+            "type": "price_ma_cross",
+            "params": {
+              "direction": "both",
+              "average": "sma",
+              "period": 200
+            }
+          },
+          {
+            "type": "volume_spike",
+            "params": {
+              "period": 20,
+              "multiple": 2
+            }
+          }
+        ]
+      },
+      "composable": false
     }
   ]
 }

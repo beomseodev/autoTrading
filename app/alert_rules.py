@@ -1,6 +1,7 @@
 """Closing-bar alert contracts and deterministic, unrounded signal evaluation."""
 from typing import Literal
 from math import isfinite
+import json
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -88,6 +89,41 @@ LABELS = dict(zip(PARAMS, ["종가와 이동평균 교차", "이동평균선 교
                          "일간 급등락", "RSI 교차", "기간 신고가·신저가", "거래량 급증",
                          "MACD 교차", "볼린저밴드 돌파·복귀", "고점 대비 낙폭 진입"]))
 
+CORE_TYPES = tuple(PARAMS)
+
+
+class Condition(Params):
+    type: str
+    params: dict
+
+    @model_validator(mode="after")
+    def normalize(self):
+        if self.type not in CORE_TYPES:
+            raise ValueError("기존 종가 조건만 결합할 수 있습니다.")
+        self.params = normalize_rule(self.type, self.params)
+        return self
+
+
+class AllOf(Params):
+    conditions: list[Condition] = Field(default_factory=lambda: [
+        Condition(type="price_ma_cross",params={}),Condition(type="volume_spike",params={})], min_length=2,max_length=3)
+
+    @model_validator(mode="after")
+    def canonical(self):
+        key = lambda c: json.dumps(c.model_dump(),sort_keys=True)
+        if len({key(c) for c in self.conditions}) != len(self.conditions):
+            raise ValueError("같은 하위 조건을 중복해서 넣을 수 없습니다.")
+        self.conditions.sort(key=key)
+        return self
+
+
+PARAMS["all_of"] = AllOf
+LABELS["all_of"] = "같은 날 모든 조건 충족 (AND)"
+
+
+def contains_price_rule(kind, params):
+    return kind == "price_cross" or (kind == "all_of" and any(c["type"] == "price_cross" for c in params["conditions"]))
+
 
 def normalize_rule(kind, params):
     if kind not in PARAMS:
@@ -96,6 +132,8 @@ def normalize_rule(kind, params):
 
 
 def minimum_bars(kind, p):
+    if kind == "all_of":
+        return max(minimum_bars(c["type"],c["params"]) for c in p["conditions"])
     if kind == "ma_cross":
         return p["longPeriod"] + 1
     if kind == "macd_cross":
@@ -114,6 +152,15 @@ def evaluate_rule(kind, params, bars):
     result = {"status": "insufficient_data", "triggers": [], "values": {}, "reason": "계산 자료 부족"}
     if len(bars) < minimum_bars(kind, p):
         return result
+    if kind == "all_of":
+        children = [{**c,"result":evaluate_rule(c["type"],c["params"],bars)} for c in p["conditions"]]
+        unavailable = next((c["result"] for c in children if c["result"]["status"] not in ("signal","no_signal")),None)
+        if unavailable:
+            return {**unavailable,"conditions":children}
+        matched = all(c["result"]["status"] == "signal" for c in children)
+        return {"status":"signal" if matched else "no_signal","triggers":["all"] if matched else [],
+                "values":{"close":float(bars[-1]["close"])},"conditions":children,
+                "reason":"같은 거래일의 모든 조건이 충족되었습니다." if matched else "같은 거래일의 모든 조건이 충족되지는 않았습니다."}
     frame = pd.DataFrame(bars)
     try:
         close = pd.to_numeric(frame["close"], errors="raise").astype(float)

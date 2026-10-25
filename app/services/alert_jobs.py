@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import pandas as pd
 from fastapi import HTTPException
 
-from app.alert_rules import evaluate_rule, LABELS
+from app.alert_rules import evaluate_rule, LABELS, contains_price_rule
 from app.services.alert_data import (DataPending, adjusted_bars, calendar, expected_session,
                                     fingerprint, load_daily_bars, session_close)
 from app.services.alert_email import email_configured, make_payload, send_payload
@@ -136,7 +136,7 @@ def evaluate_task(task, run, token):
     expired = len(eligible) > 5
     eligible = eligible[-5:]
     evaluations = []
-    price_split = payload["kind"] == "price_cross" and any(
+    price_split = contains_price_rule(payload["kind"],payload["params"]) and any(
         session_close(meta, datetime.fromisoformat(x["date"]).date()) > activated for x in snapshot["splits"])
     if price_split:
         evaluations = [(target, {"status": "needs_review", "reason": "분할 후 지정가격을 확인하고 재개해주세요.", "triggers": []})]

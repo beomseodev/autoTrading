@@ -47,7 +47,7 @@ const server = http.createServer((req,res)=>{
     await until("!document.getElementById('loading').hidden");
     assert(await run("document.getElementById('refresh').disabled"));
     await until("!document.getElementById('content').hidden && document.getElementById('loading').hidden");
-    assert.equal(await run("document.getElementById('kind').options.length"),10);
+    assert.equal(await run("document.getElementById('kind').options.length"),fixture.types.length);
     assert(await run("document.getElementById('rule-meaning').textContent.includes('200거래일')"));
     assert(await run("!document.getElementById('operations-panel').hidden && document.getElementById('operations').textContent.includes('자료 조회 보류: 2건') && document.getElementById('operations').textContent.includes('결과 확인 필요: 1건')"));
     await run("document.getElementById('symbol').value='SCHD'; document.getElementById('watch-form').requestSubmit()");
@@ -62,7 +62,18 @@ const server = http.createServer((req,res)=>{
     await run("watch[0].ruleCount=1;watch[0].dataStatuses=['insufficient_data'];document.getElementById('refresh').click()");
     await until("document.getElementById('loading').hidden");
     assert(await run("document.getElementById('watchlist').textContent.includes('계산 자료 부족')"));
+    await run("document.getElementById('kind').value='all_of';document.getElementById('kind').dispatchEvent(new Event('change'))");
+    assert.equal(await run("document.querySelectorAll('#params fieldset').length"),2);
+    assert(await run("document.getElementById('rule-meaning').textContent.includes('그리고')"));
+    await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+    assert(await run('document.documentElement.scrollWidth<=window.innerWidth'),'AND editor mobile overflow');
+    await send('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
     await run("document.getElementById('rule-form').requestSubmit()");
+    await until("rules.length===1 && document.getElementById('loading').hidden");
+    assert.equal(await run("rules[0].params.conditions.length"),2);
+    await run("document.querySelectorAll('#rules button')[2].click()");
+    await until("rules.length===0 && document.getElementById('loading').hidden");
+    await run("document.getElementById('kind').value='price_ma_cross';document.getElementById('kind').dispatchEvent(new Event('change'));document.getElementById('rule-form').requestSubmit()");
     await until("document.querySelectorAll('#rules button').length===3 && document.getElementById('loading').hidden");
     assert.equal(await run("rules[0].params.period"),200);
     assert.equal(await run("calls.find(c=>c.url==='/api/alerts/rules'&&c.method==='POST').headers['X-Portfolio-Account']"),'test-user');

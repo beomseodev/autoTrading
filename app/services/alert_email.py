@@ -51,6 +51,9 @@ def make_payload(user, day, events, deferred=0, legacy=None, test=False):
         lines.extend([("지연 확인: " if payload.get("delayed") else "") + f"{payload['symbol']} · {event['session_date']} 종가 · {payload['currency']}",
                       payload["label"] + " · " + direction, json_values(payload["result"]["values"]),
                       "조건: " + str(payload["params"]), ""])
+        for child in payload["result"].get("conditions",[]):
+            from app.alert_rules import LABELS
+            lines.append(LABELS[child["type"]]+": "+child["result"]["reason"]+" · "+json_values(child["result"]["values"]))
     if legacy:
         lines.extend(["리밸런싱 점검", legacy, ""])
     if deferred:

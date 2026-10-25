@@ -23,7 +23,42 @@ function element(tag,text,className){const e=document.createElement(tag);if(text
 function button(text,action){const b=element('button',text,'button quiet');b.type='button';b.addEventListener('click',()=>action().catch(fail));return b;}
 function canonicalSymbol(symbol){return /\.K[QS]$/.test(symbol)?symbol:symbol.replaceAll('.','-');}
 function typeInfo(){return state.settings.types.find(x=>x.type===$('kind').value);}
-function fields(params){$('params').replaceChildren();Object.entries(params).forEach(([key,value])=>{const label=element('label',names[key]||key);const control=element(options[key]?'select':'input');control.dataset.param=key;control.id='param-'+key;if(options[key])options[key].forEach(([val,text])=>{const opt=element('option',text);opt.value=val;control.append(opt);});else{control.type='number';control.step=key.toLowerCase().includes('period')||key==='period'?'1':'any';control.required=true;}control.value=value;label.append(control);$('params').append(label);});$('rule-meaning').textContent=describeRule($('kind').value,params);}
+function fields(params){
+  $('params').replaceChildren();
+  state.readParams=parameterFields($('kind').value,params,$('params'));
+  $('rule-meaning').textContent=describeRule($('kind').value,params);
+}
+function parameterFields(kind,params,container,prefix='param-') {
+  if(kind==='all_of') {
+    const children=[];
+    const count=element('select');count.setAttribute('aria-label','AND 조건 수');
+    [2,3].forEach(n=>{const opt=element('option',n+'개 조건');opt.value=n;count.append(opt);});count.value=params.conditions.length;container.append(count);
+    const redraw=()=>{
+      const values=children.map(c=>({type:c.select.value,params:c.read()}));
+      while(values.length<Number(count.value))values.push({type:'daily_change',params:{thresholdPct:5,direction:'both'}});
+      fields({conditions:values.slice(0,Number(count.value))});
+    };
+    count.addEventListener('change',redraw);
+    params.conditions.forEach((child,i)=>{
+      const fieldset=element('fieldset'),legend=element('legend','조건 '+(i+1)),select=element('select'),body=element('div');
+      select.setAttribute('aria-label','조건 '+(i+1)+' 종류');
+      state.settings.types.filter(t=>t.composable).forEach(t=>{const opt=element('option',t.label);opt.value=t.type;select.append(opt);});
+      select.value=child.type;fieldset.append(legend,select,body);container.append(fieldset);
+      const entry={select,read:parameterFields(child.type,child.params,body,prefix+i+'-')};children.push(entry);
+      select.addEventListener('change',()=>{body.replaceChildren();entry.read=parameterFields(select.value,state.settings.types.find(t=>t.type===select.value).defaults,body,prefix+i+'-');$('rule-meaning').textContent=describeRule('all_of',state.readParams());});
+    });
+    return ()=>({conditions:children.map(c=>({type:c.select.value,params:c.read()}))});
+  }
+  const controls=[];
+  Object.entries(params).forEach(([key,value])=>{
+    const label=element('label',names[key]||key),control=element(options[key]?'select':'input');
+    control.dataset.param=key;control.id=prefix+key;
+    if(options[key])options[key].forEach(([val,text])=>{const opt=element('option',text);opt.value=val;control.append(opt);});
+    else {control.type='number';control.step=key.toLowerCase().includes('period')||key==='period'?'1':'any';control.required=true;}
+    control.value=value;label.append(control);container.append(label);controls.push([key,control]);
+  });
+  return ()=>Object.fromEntries(controls.map(([key,c])=>[key,c.tagName==='SELECT'?c.value:Number(c.value)]));
+}
 function resetEdit(){state.edit=null;$('kind').disabled=false;$('rule-name').value='';$('cancel-edit').hidden=true;$('resolve-edit').hidden=true;$('restore-archived').checked=false;$('save-rule').textContent='선택 종목에 규칙 등록';$('rule-heading').textContent='조건 등록';fields(typeInfo().defaults);}
 function render(){
   $('watchlist').replaceChildren();
@@ -51,6 +86,7 @@ async function history(kind,append=false) {
       const kind=row.payload.kind||state.settings.types.find(t=>t.label===row.payload.label)?.type;
       if(kind)li.append(element('small',describeRule(kind,row.payload.params)));
       li.append(element('small',row.canceled?'취소된 신호':(row.payload.result.reason||'')+' · '+describeValues(row.payload.result.values,kind,row.payload.params,row.payload.currency)));
+      (row.payload.result.conditions||[]).forEach(c=>li.append(element('small',describeRule(c.type,c.params)+' · '+describeValues(c.result.values,c.type,c.params,row.payload.currency))));
       if(row.correction) li.append(element('small','자료 정정: '+row.correction.reason));
     } else {
       li.append(element('span',`${row.digest_date} · ${row.kind==='test'?'테스트 · ':''}${statuses[row.status]||row.status}`));
@@ -100,10 +136,7 @@ async function operations() {
     });
   } catch(error){$('operations-status').textContent='운영 상태 조회 실패: '+error.message;}
 }
-$('params').addEventListener('input',()=>{
-  const params={};document.querySelectorAll('[data-param]').forEach(input=>params[input.dataset.param]=input.tagName==='SELECT'?input.value:Number(input.value));
-  $('rule-meaning').textContent=describeRule($('kind').value,params);
-});
+$('params').addEventListener('input',()=>{$('rule-meaning').textContent=describeRule($('kind').value,state.readParams());});
 $('settings-form').addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/alerts/settings','PATCH',{revision:state.settings.revision,consent:$('consent').checked});await refresh();$('status').textContent='수신 설정을 저장했습니다.';}catch(error){fail(error);}});
 $('watch-form').addEventListener('submit',async e=>{
   e.preventDefault();if(requests)return;
@@ -132,8 +165,7 @@ $('template').addEventListener('change',()=>{const templates={ma200:['price_ma_c
 $('rule-form').addEventListener('submit',async e=>{
   e.preventDefault();
   try {
-    const params={};
-    document.querySelectorAll('[data-param]').forEach(input=>params[input.dataset.param]=input.tagName==='SELECT'?input.value:Number(input.value));
+    const params=state.readParams();
     if(state.edit) await api('/api/alerts/rules/'+state.edit.id,'PATCH',{revision:state.edit.revision,params,name:$('rule-name').value});
     else {
       if(!state.selected.size) throw new Error('관심종목에서 적용할 종목을 선택해주세요.');

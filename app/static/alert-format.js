@@ -1,5 +1,6 @@
 "use strict";
 function describeRule(kind,p) {
+  if(kind==='all_of')return '같은 거래일에 모두 충족: '+p.conditions.map(c=>describeRule(c.type,c.params)).join(' 그리고 ');
   const direction={up:'상향 돌파',down:'하향 돌파',both:'상향 또는 하향 돌파'}[p.direction]||'';
   const ma=`${p.period}거래일 ${p.average==='ema'?'지수':'단순'}이동평균`;
   const descriptions={
