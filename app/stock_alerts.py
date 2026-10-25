@@ -85,6 +85,15 @@ def rule_hash(kind, params):
     return sha256(json.dumps([kind, params], sort_keys=True).encode()).hexdigest()
 
 
+def register_reference(conn, meta, instrument):
+    if meta is None:return None
+    target=conn.execute('SELECT symbol,metadata FROM alert_instruments WHERE id=%s',(instrument,)).fetchone()
+    if target['symbol']==meta['symbol'] or any(target['metadata'][key]!=meta[key] for key in ('currency','calendar')):
+        raise HTTPException(422,'비교 종목은 같은 시장·통화의 다른 종목을 선택해주세요.')
+    return conn.execute("""INSERT INTO alert_instruments(id,symbol,metadata) VALUES(%s,%s,%s)
+        ON CONFLICT(symbol) DO UPDATE SET metadata=EXCLUDED.metadata RETURNING id""",(uuid4(),meta['symbol'],json_value(meta))).fetchone()['id']
+
+
 @router.get("/alerts")
 def alerts_page():
     from app.main import STATIC_DIR
@@ -183,6 +192,7 @@ def rules(request: Request):
 @router.post("/api/alerts/rules")
 def add_rules(payload: RuleInput, request: Request):
     u = user(request)
+    reference=resolve_instrument(payload.params['benchmark']) if payload.type=='relative_performance' else None
     with database() as conn:
         lock_user(conn, u["id"])
         count = conn.execute("SELECT count(*) AS n FROM alert_rules WHERE user_id=%s AND enabled AND NOT archived", (u["id"],)).fetchone()["n"]
@@ -192,6 +202,7 @@ def add_rules(payload: RuleInput, request: Request):
         for instrument in payload.instrumentIds:
             if not conn.execute("SELECT id FROM alert_watchlist WHERE user_id=%s AND instrument_id=%s AND NOT archived", (u["id"], instrument)).fetchone():
                 raise HTTPException(404, "본인 관심종목을 선택해주세요.")
+            reference_id=register_reference(conn,reference,instrument)
             existing = conn.execute("SELECT * FROM alert_rules WHERE user_id=%s AND instrument_id=%s AND fingerprint=%s FOR UPDATE",
                                     (u["id"], instrument, rule_hash(payload.type, payload.params))).fetchone()
             if existing:
@@ -202,22 +213,35 @@ def add_rules(payload: RuleInput, request: Request):
                 conn.execute("""UPDATE alert_rules SET archived=false,enabled=true,name=%s,revision=revision+1,
                     meaning_version=meaning_version+1,activated_at=now(),last_session=NULL,last_result=NULL,evaluation_state='{}' WHERE id=%s""", (payload.name, existing["id"]))
                 identities.append(existing["id"])
+                conn.execute('UPDATE alert_rules SET benchmark_instrument_id=%s WHERE id=%s',(reference_id,existing['id']))
                 continue
             identity = uuid4()
             conn.execute("""INSERT INTO alert_rules(id,user_id,instrument_id,kind,params,name,fingerprint)
                 VALUES(%s,%s,%s,%s,%s,%s,%s)""", (identity, u["id"], instrument, payload.type,
                 json_value(payload.params), payload.name, rule_hash(payload.type, payload.params)))
             identities.append(identity)
+            conn.execute('UPDATE alert_rules SET benchmark_instrument_id=%s WHERE id=%s',(reference_id,identity))
     return {"ids": identities}
 
 
 @router.patch("/api/alerts/rules/{identity}")
 def patch_rule(identity: UUID, payload: RulePatch, request: Request):
     u = user(request)
+    reference=None
+    if payload.params is not None:
+        with database() as conn:
+            before=owned(conn,'alert_rules',identity,u['id'])
+        if before['kind']=='relative_performance':
+            try:p=normalize_rule(before['kind'],payload.params)
+            except ValueError:raise HTTPException(422,'규칙 매개변수를 확인해주세요.') from None
+            reference=resolve_instrument(p['benchmark'])
     with database() as conn:
         lock_user(conn, u["id"])
         row = owned(conn, "alert_rules", identity, u["id"], lock=True)
         check_revision(row, payload.revision)
+        if reference:
+            reference_id=register_reference(conn,reference,row['instrument_id'])
+            conn.execute('UPDATE alert_rules SET benchmark_instrument_id=%s WHERE id=%s',(reference_id,identity))
         try:
             p = normalize_rule(row["kind"], payload.params) if payload.params is not None else row["params"]
         except ValueError:

@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import pandas as pd
 from fastapi import HTTPException
 
-from app.alert_rules import evaluate_rule, LABELS, contains_price_rule
+from app.alert_rules import evaluate_rule, LABELS, contains_price_rule, minimum_bars
 from app.services.alert_data import (DataPending, adjusted_bars, calendar, expected_session,
                                     fingerprint, load_daily_bars, session_close)
 from app.services.alert_email import email_configured, make_payload, send_payload
@@ -67,6 +67,10 @@ def initialize(now):
                     ON CONFLICT DO NOTHING""", (uuid4(), run_id, rule["id"], json_value(payload)))
                 conn.execute("""INSERT INTO alert_tasks(id,run_id,kind,target_id,payload) VALUES(%s,%s,'fetch',%s,%s)
                     ON CONFLICT DO NOTHING""", (uuid4(), run_id, rule["instrument_id"], json_value(rule["metadata"])))
+                if rule["benchmark_instrument_id"]:
+                    conn.execute("""INSERT INTO alert_tasks(id,run_id,kind,target_id,payload)
+                        SELECT %s,%s,'fetch',id,metadata FROM alert_instruments WHERE id=%s
+                        ON CONFLICT DO NOTHING""",(uuid4(),run_id,rule["benchmark_instrument_id"]))
         return conn.execute("SELECT * FROM alert_runs WHERE id=%s", (run_id,)).fetchone(), token
 
 
@@ -98,12 +102,12 @@ def fetch_task(task, run, token, now):
 def mark_corrections(conn, instrument_id, cached, snapshot, new_hash):
     old = cached["snapshot"]
     old_dates = {x["date"] for x in old["raw"]}
-    overlap = [x for x in snapshot["raw"] if x["date"] in old_dates]
+    overlap = [x for x in snapshot["raw"] if x["date"] <= old['target']]
     actions = [x for x in snapshot["splits"] if x["date"] <= old["target"]]
     if overlap == old["raw"] and actions == old["splits"]:
         return
     old_by_day={x["date"]:x for x in old["raw"]}
-    changed_days={x["date"] for x in overlap if x!=old_by_day[x["date"]]}
+    changed_days={x["date"] for x in overlap if x!=old_by_day.get(x["date"])} | (old_dates-{x['date'] for x in overlap})
     if actions != old["splits"]:
         changed_days.update(old_dates)
     armed = conn.execute("""SELECT * FROM alert_rules WHERE instrument_id=%s AND kind='retest'
@@ -113,8 +117,16 @@ def mark_corrections(conn, instrument_id, cached, snapshot, new_hash):
             conn.execute("""UPDATE alert_rules SET enabled=false,revision=revision+1,last_result=%s WHERE id=%s""",
                 (json_value({"status":"needs_review","reason":"돌파 근거 자료가 정정되었습니다. 조건 확인 후 재개해주세요.","triggers":[]}),rule["id"]))
     events = conn.execute("""SELECT e.*,r.kind FROM alert_events e JOIN alert_rules r ON r.id=e.rule_id
-        WHERE e.instrument_id=%s AND e.created_at>=now()-interval '180 days'""", (instrument_id,)).fetchall()
+        WHERE (e.instrument_id=%s OR e.payload->>'benchmarkId'=%s) AND e.created_at>=now()-interval '180 days'""", (instrument_id,str(instrument_id))).fetchall()
     for event in events:
+        if event["kind"]=="relative_performance":
+            days=[b['date'] for b in old['raw'] if b['date']<=str(event['session_date'])][-minimum_bars(event['kind'],event['payload']['params']):]
+            if days and any(days[0]<=day<=str(event['session_date']) for day in changed_days):
+                conn.execute("UPDATE alert_events SET correction=%s WHERE id=%s",(json_value({
+                    'instrumentId':str(instrument_id),'previousHash':fingerprint(old),'newHash':new_hash,
+                    'reason':'상대성과 계산에 사용된 가격 자료가 정정되었습니다. 자동 재발송하지 않습니다.',
+                    'result':{'status':'needs_review','triggers':[]}}),event['id']))
+            continue
         before=event["payload"]["result"].get("stateBefore")
         result = evaluate_rule(event["kind"], event["payload"]["params"], adjusted_bars(snapshot, event["session_date"].isoformat()),state=before)
         if event["kind"] == "retest" and before:
@@ -126,14 +138,30 @@ def mark_corrections(conn, instrument_id, cached, snapshot, new_hash):
             conn.execute("UPDATE alert_events SET correction=%s WHERE id=%s AND correction IS DISTINCT FROM %s", (json_value(correction), event["id"], json_value(correction)))
 
 
+def evaluation_bars(rule, snapshot, reference, day):
+    bars=adjusted_bars(snapshot,day)
+    if rule['kind']!='relative_performance':return bars
+    if not reference:raise DataPending('reference_pending')
+    size=minimum_bars(rule['kind'],rule['params'])
+    bars=bars[-size:]
+    ref=adjusted_bars(reference,day)[-size:]
+    dates=[b['date'] for b in bars]
+    expected=[x.date().isoformat() for x in calendar(rule['metadata']['calendar'],int(day[:4])).sessions_in_range(dates[0],day)] if dates else []
+    if dates!=[b['date'] for b in ref] or dates!=expected:
+        raise DataPending('reference_session_mismatch')
+    return [{**b,'referenceClose':r['close']} for b,r in zip(bars,ref)]
+
+
 def evaluate_task(task, run, token):
     payload = task["payload"]
     meta = payload["metadata"]
     with database() as conn:
-        fetch = conn.execute("SELECT * FROM alert_tasks WHERE run_id=%s AND kind='fetch' AND target_id=%s", (run["id"], payload["instrument_id"])).fetchone()
-        if fetch["status"] == "pending":
+        dependencies=[payload['instrument_id']]+([payload['benchmark_instrument_id']] if payload.get('benchmark_instrument_id') else [])
+        fetches = conn.execute("SELECT * FROM alert_tasks WHERE run_id=%s AND kind='fetch' AND target_id=ANY(%s::uuid[])", (run["id"],dependencies)).fetchall()
+        if len(fetches)!=len(dependencies) or any(f['status']=='pending' for f in fetches):
             return False
-        if fetch["status"] != "done":
+        fetch=next((f for f in fetches if f['status']!='done'),None)
+        if fetch:
             fence(conn, run["id"], token)
             result = {"status": "deferred", "reason": fetch["error"], "checkedDate": str(run["digest_date"])}
             conn.execute("UPDATE alert_rules SET last_result=%s WHERE id=%s AND meaning_version=%s",
@@ -141,6 +169,8 @@ def evaluate_task(task, run, token):
             finish_task(conn, task, result, "deferred")
             return True
         cached = conn.execute("SELECT * FROM alert_daily_bars WHERE instrument_id=%s", (payload["instrument_id"],)).fetchone()
+        reference=conn.execute('SELECT snapshot FROM alert_daily_bars WHERE instrument_id=%s',(payload.get('benchmark_instrument_id'),)).fetchone() if payload.get('benchmark_instrument_id') else None
+    reference=reference['snapshot'] if reference else None
     snapshot = cached["snapshot"]
     target = snapshot["target"]
     activated = datetime.fromisoformat(payload["activated_at"])
@@ -163,7 +193,7 @@ def evaluate_task(task, run, token):
         for day in eligible:
             age = (len(calendar(meta["calendar"],int(day[:4])).sessions_in_range(evaluation_state["date"],day))-1
                    if payload["kind"]=="retest" and evaluation_state else None)
-            result = evaluate_rule(payload["kind"], payload["params"], adjusted_bars(snapshot, day),state=evaluation_state,session_age=age)
+            result = evaluate_rule(payload["kind"], payload["params"], evaluation_bars(payload,snapshot,reference,day),state=evaluation_state,session_age=age)
             evaluation_state = result.get("state",evaluation_state)
             if result["status"] == "insufficient_data" and day != eligible[-1]:
                 # Initial history can warm up during the catch-up window.
@@ -186,6 +216,9 @@ def evaluate_task(task, run, token):
             for trigger in (result["triggers"] if day in delivery_days else []):
                 event = {"symbol": payload["symbol"], "currency": meta["currency"], "kind": payload["kind"], "label": LABELS[payload["kind"]],
                          "params": payload["params"], "result": result}
+                if payload.get('benchmark_instrument_id'):
+                    event['benchmarkId']=payload['benchmark_instrument_id']
+                    event['benchmarkHash']=fingerprint(reference)
                 conn.execute("""INSERT INTO alert_events(id,user_id,rule_id,instrument_id,meaning_version,session_date,trigger_kind,snapshot_hash,payload)
                     VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
                              (uuid4(), current["user_id"], current["id"], current["instrument_id"], current["meaning_version"], day,
@@ -196,7 +229,7 @@ def evaluate_task(task, run, token):
             conn.execute("UPDATE alert_tasks SET payload=%s WHERE id=%s",(json_value(updated),task["id"]))
             return False
         if not evaluations:
-            preview = evaluate_rule(payload["kind"], payload["params"], adjusted_bars(snapshot, target))
+            preview = evaluate_rule(payload["kind"], payload["params"], evaluation_bars(payload,snapshot,reference,target))
             if preview["status"] in ("signal", "no_signal"):
                 preview = {**preview, "status": "no_new_session", "reason": "활성화 후 새 완료 거래일이 없습니다.", "triggers": []}
             if payload["kind"]!="retest" or not current["last_result"]:
@@ -326,10 +359,13 @@ def process_alert_run(*, now=None):
     if os.getenv("STOCK_ALERTS_SEND_ENABLED") != "true":
         # No production run/task/event/digest or cursor mutations in dry-run mode.
         with database() as conn:
-            rules = conn.execute("SELECT r.*,b.snapshot,i.metadata FROM alert_rules r JOIN alert_instruments i ON i.id=r.instrument_id LEFT JOIN alert_daily_bars b ON b.instrument_id=r.instrument_id WHERE r.enabled AND NOT r.archived").fetchall()
+            rules = conn.execute("SELECT r.*,b.snapshot,i.metadata,ref.snapshot AS reference FROM alert_rules r JOIN alert_instruments i ON i.id=r.instrument_id LEFT JOIN alert_daily_bars b ON b.instrument_id=r.instrument_id LEFT JOIN alert_daily_bars ref ON ref.instrument_id=r.benchmark_instrument_id WHERE r.enabled AND NOT r.archived").fetchall()
         counts = {}
         for rule in rules:
-            status = evaluate_rule(rule["kind"], rule["params"], adjusted_bars(rule["snapshot"], rule["snapshot"]["target"]))["status"] if rule["snapshot"] else "data_pending"
+            try:
+                status = evaluate_rule(rule["kind"], rule["params"], evaluation_bars(rule,rule["snapshot"],rule['reference'],rule["snapshot"]["target"]))["status"] if rule["snapshot"] else "data_pending"
+            except DataPending:
+                status='data_pending'
             if rule["kind"]=="retest" and rule["snapshot"]:
                 snap=rule["snapshot"]
                 pending=[b["date"] for b in snap["raw"] if (not rule["last_session"] or b["date"]>str(rule["last_session"]))
@@ -378,10 +414,13 @@ def process_alert_run(*, now=None):
                     increment = int(exc.code != "provider_rate_limited")
                     if exc.code == "provider_rate_limited":
                         conn.execute("UPDATE alert_runs SET rate_limit_count=rate_limit_count+1 WHERE id=%s", (run["id"],))
-                    conn.execute("""UPDATE alert_tasks SET attempts=attempts+%s,error=%s,
+                    updated=conn.execute("""UPDATE alert_tasks SET attempts=attempts+%s,error=%s,
                         next_attempt_at=now()+(%s * interval '1 second'),
-                        status=CASE WHEN NOT %s OR attempts+%s>=3 THEN 'deferred' ELSE 'pending' END WHERE id=%s""",
-                                 (increment, exc.code, exc.delay, exc.retry, increment, task["id"]))
+                        status=CASE WHEN NOT %s OR attempts+%s>=3 THEN 'deferred' ELSE 'pending' END WHERE id=%s RETURNING status""",
+                                 (increment, exc.code, exc.delay, exc.retry, increment, task["id"])).fetchone()
+                    if task['kind']=='evaluate' and updated['status']=='deferred':
+                        conn.execute('UPDATE alert_rules SET last_result=%s WHERE id=%s AND meaning_version=%s',
+                            (json_value({'status':'deferred','reason':exc.code,'checkedDate':str(run['digest_date'])}),task['target_id'],task['payload']['meaning_version']))
         if now >= run["cutoff"] + timedelta(minutes=45):
             with database() as conn:
                 fence(conn, run["id"], token)

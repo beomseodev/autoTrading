@@ -80,6 +80,12 @@ const server = http.createServer((req,res)=>{
     assert(await run("document.getElementById('rules').textContent.includes('고정')"));
     await run("document.querySelectorAll('#rules button')[2].click()");
     await until("rules.length===0 && document.getElementById('loading').hidden");
+    await run("document.getElementById('kind').value='relative_performance';document.getElementById('kind').dispatchEvent(new Event('change'));document.getElementById('param-benchmark').value='QQQ';document.getElementById('rule-form').requestSubmit()");
+    await until("rules.length===1 && document.getElementById('loading').hidden");
+    assert.equal(await run("rules[0].params.benchmark"),'QQQ');
+    assert(await run("document.getElementById('rules').textContent.includes('현금배당 제외')"));
+    await run("document.querySelectorAll('#rules button')[2].click()");
+    await until("rules.length===0 && document.getElementById('loading').hidden");
     await run("document.getElementById('kind').value='price_ma_cross';document.getElementById('kind').dispatchEvent(new Event('change'));document.getElementById('rule-form').requestSubmit()");
     await until("document.querySelectorAll('#rules button').length===3 && document.getElementById('loading').hidden");
     assert.equal(await run("rules[0].params.period"),200);

@@ -17,3 +17,7 @@ test('retest current state is separate from a historical waiting result',()=>{
   assert.match(describeState(rule),/2026-10-22.*100 USD.*대기 중/);
   assert.match(describeState({...rule,enabled:false}),/대기 없음/);
 });
+test('relative performance explains subtraction and uses percentage points',()=>{
+  assert.match(describeRule('relative_performance',{period:20,benchmark:'SPY',thresholdPct:0,direction:'up'}),/SPY.*뺀 차이.*0%p.*현금배당 제외/);
+  assert.match(describeValues({value:-2,threshold:0},'relative_performance',{},'USD'),/-2%p.*0%p/);
+});

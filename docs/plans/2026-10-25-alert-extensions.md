@@ -8,8 +8,8 @@
 | 1 | 명세 보완: 읽을 수 있는 규칙·이력, 운영자 상태 | 완료, 네 역할 재검토 통과 |
 | 2 | 같은 종목·거래일 AND 2~3조건 | 완료, 네 역할 통과 |
 | 3 | 돌파일 가격 고정 재접근 | 완료, 네 역할 검토·수정 후 팀장 승인 |
-| 4 | 동일 시장·통화 상대 수익률 | 진행 중 |
-| 5 | 저장 보유자산 기반 평단·비중 | 대기 |
+| 4 | 동일 시장·통화 상대 수익률 | 완료, 네 역할 검토·수정 후 팀장 승인 |
+| 5 | 저장 보유자산 기반 평단·비중 | 진행 중 |
 | 6 | 실적·배당 일정·변경 | 대기 |
 | 7 | 한국·미국 공시 | 대기 |
 | 8 | 채널별 일간·주간 | 대기 |
@@ -33,3 +33,9 @@ Orca run `run_b05fbfd8e6aa`의 비판·가능성·외부인·확장성 4명 참�
 Four Orca roles reviewed, no missing roles/provider substitutions. Initial findings: replay all missed state transitions separately from the five-session delivery window; invalidate sequences affected by intermediate bar corrections; re-arm on the first expired day; reflect stored state in dry-run; display current waiting state separately. All adopted. Critic, possibility and outsider follow-ups cleared their findings. Scale follow-up identified an initial warm-up mismatch in dry-run: coordinator reproduced a failing test, applied the same insufficient-data skip policy as live evaluation, and confirmed it passes. Coordinator accepts the final fix; no third review round was claimed. Reports: `.team-review/extensions-f3-*-followup.md`. All workers released.
 
 Extension tests 18 passed before follow-up; added 70-session chunk/resume and initial warm-up regressions also passed. Related jobs/extensions 33 passed; Node format 3 and Chrome passed. Historical data corrections conservatively require confirmation; no historical signal is automatically re-sent.
+
+## Feature 4 verification
+
+Four Orca roles participated, no missing roles or provider substitutions. Adopted findings: validate against exchange sessions even when both inputs omit the same day; track inserted/deleted historical rows; retain reference hash and correct same-instrument hash pairs; update visible deferred status immediately after retry exhaustion; explain percentage points and price-only returns in email. Added correction lookup indexes. Critic re-read the latest fixes before settlement and cleared required findings. Coordinator reproduced failures and verified fixes; all workers released. Reports: `.team-review/extensions-f4-*.md`.
+
+Before review fixes, full Python suite: 305 passed / one load test skipped; Chrome passed. After fixes, related job/extension tests: 42 passed; latest relative tests: 7 passed including shared-reference account isolation and cancellation after benchmark edits. Format tests: 4 passed. Representative correction-query timing is included in the final load review; no live data or mail was sent.

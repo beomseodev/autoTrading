@@ -137,6 +137,22 @@ PARAMS["retest"] = Retest
 LABELS["retest"] = "돌파 후 고정 가격 재접근"
 
 
+class Relative(Direction):
+    benchmark: str = Field('SPY',min_length=1,max_length=20,pattern=r'^(?:[A-Za-z][A-Za-z0-9.\-]*|[0-9]{6}\.[Kk][SsQq])$')
+    period: int = Field(20,ge=2,le=252,strict=True)
+    thresholdPct: float = Field(0,ge=-1000,le=1000)
+
+    @model_validator(mode="after")
+    def symbol(self):
+        self.benchmark=self.benchmark.upper()
+        if not self.benchmark.endswith(('.KS','.KQ')):self.benchmark=self.benchmark.replace('.','-')
+        return self
+
+
+PARAMS['relative_performance']=Relative
+LABELS['relative_performance']='비교 종목 대비 수익률 차이'
+
+
 def contains_price_rule(kind, params):
     return kind in ("price_cross","retest") or (kind == "all_of" and any(c["type"] == "price_cross" for c in params["conditions"]))
 
@@ -148,6 +164,7 @@ def normalize_rule(kind, params):
 
 
 def minimum_bars(kind, p):
+    if kind=='relative_performance':return p['period']+2
     if kind == "retest":
         return minimum_bars(p["trigger"]["type"],p["trigger"]["params"])
     if kind == "all_of":
@@ -227,6 +244,12 @@ def evaluate_rule(kind, params, bars, *, state=None, session_age=None):
             b[:] = p["price"]
         elif kind == "rsi_cross":
             a, b = compute_rsi(close, p["period"]), b + p["level"]
+        elif kind == "relative_performance":
+            if 'referenceClose' not in frame or frame['referenceClose'].isna().any():return result
+            reference=pd.to_numeric(frame['referenceClose'],errors='raise').astype(float)
+            if not reference.map(lambda x:isfinite(x) and x>0).all():raise ValueError('invalid reference')
+            a=(close.pct_change(p['period'],fill_method=None)-reference.pct_change(p['period'],fill_method=None))*100
+            b[:]=p['thresholdPct']
         elif kind == "macd_cross":
             a = average(close, p["fastPeriod"], "ema") - average(close, p["slowPeriod"], "ema")
             b = average(a, p["signalPeriod"], "ema") if p["crossMode"] == "signal" else b

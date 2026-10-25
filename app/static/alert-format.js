@@ -5,6 +5,7 @@ function describeRule(kind,p) {
   const direction={up:'상향 돌파',down:'하향 돌파',both:'상향 또는 하향 돌파'}[p.direction]||'';
   const ma=`${p.period}거래일 ${p.average==='ema'?'지수':'단순'}이동평균`;
   const descriptions={
+    relative_performance:`최근 ${p.period}거래일 가격 수익률에서 ${p.benchmark} 수익률을 뺀 차이가 ${p.thresholdPct}%p를 ${direction}한 날 (같은 시장·통화, 분할 조정·현금배당 제외)`,
     price_ma_cross:`종가가 ${ma}을 ${direction}한 날`,
     ma_cross:`${p.shortPeriod}거래일선이 ${p.longPeriod}거래일선을 ${direction}한 날 (${p.average==='ema'?'EMA':'SMA'})`,
     price_cross:`종가가 현지 통화 ${p.price}을 ${direction}한 날`,
@@ -22,7 +23,7 @@ function describeValues(values={},kind='',params={},currency='현지 통화') {
   values={...values};
   if(kind==='daily_change')values.threshold=params.thresholdPct;
   if(kind==='range_breakout')delete values.threshold;
-  const unit=['daily_change','drawdown_cross'].includes(kind)?'%':kind==='volume_spike'?'주':kind==='rsi_cross'?'':kind?' '+currency:'';
+  const unit=kind==='relative_performance'?'%p':['daily_change','drawdown_cross'].includes(kind)?'%':kind==='volume_spike'?'주':kind==='rsi_cross'?'':kind?' '+currency:'';
   const labels={previousValue:'전일 값',value:'당일 값',previousThreshold:'전일 기준',threshold:'기준',close:'종가 (현지 통화)',previousHigh:'직전 최고 종가',previousLow:'직전 최저 종가'};
   return Object.entries(values).filter(([key,value])=>labels[key]&&Number.isFinite(value)).map(([key,value])=>`${labels[key]}: ${value.toLocaleString('ko-KR',{maximumFractionDigits:6})}${['close','previousHigh','previousLow'].includes(key)?' '+currency:unit}`).join(' · ')||'비교 수치 없음';
 }

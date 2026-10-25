@@ -36,7 +36,9 @@ def test_minimum_and_validation(kind):
     p = normalize_rule(kind, params)
     n = minimum_bars(kind, p)
     assert evaluate_rule(kind, p, bars([10] * (n - 1)))["status"] == "insufficient_data"
-    assert evaluate_rule(kind, p, bars([10] * n))["status"] == "no_signal"
+    complete=bars([10]*n)
+    if kind=='relative_performance':complete=[{**b,'referenceClose':10} for b in complete]
+    assert evaluate_rule(kind, p, complete)["status"] == "no_signal"
     with pytest.raises(ValueError):
         normalize_rule(kind, {**params, "userId": "forged"})
 

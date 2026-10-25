@@ -138,6 +138,17 @@
         "windowSessions": 5,
         "tolerancePct": 1
       }
+    },
+    {
+      "type": "relative_performance",
+      "label": "비교 종목 대비 수익률 차이",
+      "composable": false,
+      "defaults": {
+        "direction": "both",
+        "benchmark": "SPY",
+        "period": 20,
+        "thresholdPct": 0
+      }
     }
   ]
 }
