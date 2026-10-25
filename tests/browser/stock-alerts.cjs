@@ -31,11 +31,19 @@ const server = http.createServer((req,res)=>{
     await send('Page.addScriptToEvaluateOnNewDocument',{source:`
       window.fixture=${JSON.stringify(fixture)};window.calls=[];window.watch=[];window.rules=[];window.rejectSave=false;window.rejectSymbol=null;window.loseSymbol=null;window.watchSequence=0;
       window.holdings=[{ticker:'SCHD'},{ticker:'AAPL'},{ticker:'QQQ'},{ticker:'TQQQ'}];window.events=[];window.preferences={emailFrequency:'daily',consent:false};
+      window.pushDevices=[];window.localSubscription=null;window.permissionResult='denied';window.permissionRequests=0;window.subscriptionCount=0;window.losePushPost=false;window.rejectPushSettings=false;window.settingsRevision=1;
+      window.Notification={permission:'default',requestPermission:async()=>{permissionRequests++;Notification.permission=permissionResult;return permissionResult;}};
+      window.PushManager=function(){};
+      const registration={pushManager:{getSubscription:async()=>localSubscription,subscribe:async options=>{if(!options.userVisibleOnly)throw Error('visible required');subscriptionCount++;localSubscription={options,endpoint:'https://fcm.googleapis.com/fcm/send/browser-'+subscriptionCount,toJSON:()=>({endpoint:localSubscription.endpoint,keys:{p256dh:'test',auth:'test'}}),unsubscribe:async()=>{localSubscription=null;return true;}};return localSubscription;}}};
+      Object.defineProperty(navigator,'serviceWorker',{value:{getRegistration:async()=>registration,register:async()=>registration,ready:Promise.resolve(registration)}});
       window.fetch=async(url,opts={})=>{calls.push({url,...opts});await new Promise(r=>setTimeout(r,150));let data={items:[],nextCursor:null};const method=opts.method||'GET';const body=opts.body?JSON.parse(opts.body):{};
       if(url==='/auth/session')data={user:{sub:'test-user',email:'test@example.com'},isOwner:true};
       else if(url==='/api/alerts/events')data={items:events,nextCursor:null};
       else if(url==='/api/alerts/operations')data={runs:[{digest_date:'2026-10-23',tasks:[{kind:'fetch',status:'deferred',count:2}],deliveries:[{status:'unknown',count:1}],duration_seconds:12.5,rate_limit_count:3,oldestPending:null}]};
-      else if(url==='/api/alerts/settings'){if(method==='PATCH')Object.assign(preferences,body);data={...fixture,revision:1,email:'test@example.com',sendingEnabled:false,...preferences};}
+      else if(url==='/api/alerts/settings'){if(method==='PATCH'){if(body.revision!==settingsRevision)return {ok:false,status:409,json:async()=>({detail:'settings conflict'})};settingsRevision++;Object.assign(preferences,body);}data={...fixture,email:'test@example.com',sendingEnabled:false,pushConfigured:true,pushPublicKey:'BAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',...preferences,revision:settingsRevision};}
+      else if(url==='/api/alerts/push/subscriptions'){if(method==='POST'){if(!pushDevices.some(d=>d.endpoint===body.endpoint))pushDevices.push({id:'device-'+subscriptionCount,endpoint:body.endpoint,created_at:'2026-10-25T00:00:00Z'});if(losePushPost){losePushPost=false;throw new Error('push response lost');}}data={items:pushDevices,id:'device-'+subscriptionCount};}
+      else if(url.startsWith('/api/alerts/push/subscriptions/')&&method==='DELETE')pushDevices=pushDevices.filter(d=>d.id!==url.split('/').at(-1));
+      else if(url==='/api/alerts/push/settings'&&method==='PATCH'){if(rejectPushSettings){rejectPushSettings=false;settingsRevision++;return {ok:false,status:409,json:async()=>({detail:'push settings conflict'})};}if(body.revision!==settingsRevision)return {ok:false,status:409,json:async()=>({detail:'push stale revision'})};settingsRevision++;preferences.pushConsent=body.consent;preferences.pushFrequency=body.frequency;}
       else if(url.startsWith('/api/alerts/instrument?'))data={symbol:new URL(url,'http://test').searchParams.get('symbol').trim().toUpperCase(),name:'<img src=x onerror=alert(1)>',mic:'ARCX',currency:'USD'};
       else if(url==='/api/dashboard/state')data={state:{portfolio:{positions:holdings}}};
       else if(url==='/api/alerts/watchlist'){if(method==='POST'){if(rejectSave||body.symbol===rejectSymbol)return {ok:false,json:async()=>({detail:'종목 조회 실패. 입력은 유지됩니다.'})};const symbol=/[.]K[QS]$/.test(body.symbol)?body.symbol:body.symbol.replaceAll('.','-');if(watch.some(w=>w.symbol===symbol))return {ok:false,status:409,json:async()=>({detail:'이미 등록된 관심종목입니다.'})};watchSequence++;watch.push({id:'watch-'+watchSequence,instrumentId:'instrument-'+watchSequence,symbol,metadata:{name:'<img src=x onerror=alert(1)>',mic:'ARCX',currency:'USD'},ruleCount:0,dataStatuses:[]});if(body.symbol===loseSymbol){loseSymbol=null;throw new TypeError('Failed to fetch');}}data={items:watch,...watch.at(-1)};}
@@ -49,6 +57,30 @@ const server = http.createServer((req,res)=>{
     assert(await run("document.getElementById('refresh').disabled"));
     await until("!document.getElementById('content').hidden && document.getElementById('loading').hidden");
     assert.equal(await run("document.getElementById('kind').options.length"),fixture.types.length);
+    assert.equal(await run('permissionRequests'),0,'Page load must not request permission');
+    await run("document.getElementById('push-connect').click()");
+    await until("document.getElementById('status').textContent.includes('허용하지 않았습니다')");
+    assert.equal(await run('pushDevices.length'),0);
+    await run("permissionResult='granted';document.getElementById('push-frequency').value='weekly';document.getElementById('push-connect').click()");
+    await until("document.getElementById('status').textContent.includes('브라우저를 연결') && document.getElementById('loading').hidden");
+    assert(await run("preferences.pushConsent && preferences.pushFrequency==='weekly' && document.getElementById('push-devices').textContent.includes('이 브라우저')"));
+    await run("localSubscription.options.applicationServerKey=new Uint8Array([1,2,3]);document.getElementById('status').textContent='';document.getElementById('push-connect').click()");
+    await until("document.getElementById('status').textContent.includes('브라우저를 연결') && document.getElementById('loading').hidden");
+    assert.equal(await run('subscriptionCount'),2,'Reconnect after server key rotation must replace the browser subscription');
+    await run("document.querySelector('#push-devices button').click()");
+    await until('pushDevices.length===0 && localSubscription===null');
+    await until("document.getElementById('loading').hidden");
+    for(const failure of ['losePushPost','rejectPushSettings']){
+      await run(failure+"=true;document.getElementById('status').textContent='';document.getElementById('push-connect').click()");
+      await until("document.getElementById('status').textContent.includes('push ') && document.getElementById('loading').hidden");
+      const count=await run('subscriptionCount');
+      await run("document.getElementById('status').textContent='';document.getElementById('push-connect').click()");
+      await until("document.getElementById('status').textContent.includes('브라우저를 연결') && document.getElementById('loading').hidden");
+      assert.equal(await run('subscriptionCount'),count,'Partial success must reuse the saved browser subscription');
+      assert.equal(await run('pushDevices.length'),1);
+      await run("document.querySelector('#push-devices button').click()");
+      await until('pushDevices.length===0 && localSubscription===null');await until("document.getElementById('loading').hidden");
+    }
     await run("document.getElementById('email-frequency').value='weekly';document.getElementById('settings-form').requestSubmit()");
     await until("document.getElementById('loading').hidden");
     assert.equal(await run("preferences.emailFrequency"),'weekly');

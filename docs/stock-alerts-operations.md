@@ -105,3 +105,21 @@ Chrome 검사는 Windows의 기본 Chrome 실행 경로를 사용한다. 화면 
 이메일은 기존 계정과 기존 API 요청 모두 일간이 기본이다. 주간을 선택해도 조건은 매일 평가하며, 한국시간 월요일 오전 8시대에 최근 7일 동안 확인한 유효한 신호를 모아 보낸다. 주간 메일의 보류 개수는 이번 점검 기준이다. 조건을 중지·수정하거나 데이터 정정이 확인되면 대기 중인 해당 신호는 제외된다.
 
 같은 채널에서 이미 접수되었거나 접수 여부가 불확실한 신호는 수신 주기를 바꿔도 재발송하지 않는다. 하루에 한 묶음만 준비한다. 당일 묶음이 준비된 뒤 주기를 변경하면 미발송 묶음이 취소될 수 있으며, 새 주기는 다음 예정일부터 적용된다. 이메일 테스트는 별도로 하루 한 번이다. 주간 요약에는 기존 리밸런싱 점검도 동일 주기로 포함된다. 동의를 유지한 주기 설정은 기존 메일의 해지 링크를 보존한다. 동의 변경·재구독과 기존 동의 전용 API의 재동의 요청은 이전 링크를 무효화한다.
+
+## 웹 푸시
+
+이메일과 독립된 동의·일간/월요일 주간 주기를 지원한다. 설정 화면의 연결 버튼을 눌러 브라우저 권한을 허용해야 하며, 페이지 방문만으로 권한을 요청하지 않는다. 계정당 최대 5개 브라우저를 연결하고 각 연결을 해제할 수 있다. 이메일 해지는 이메일만 중지한다. 알림 계정 삭제는 모든 푸시 연결과 동의도 삭제한다. 기존 리밸런싱 본문은 이메일에만 포함된다.
+
+HTTPS와 Push API를 지원하는 브라우저가 필요하다. iOS/iPadOS는 지원 버전에서 홈 화면에 추가한 웹 앱으로 이용한다. 최소 manifest와 알림 전용 서비스 워커를 제공하며 개인 API·페이지를 오프라인 캐시에 저장하지 않는다. 잠금 화면에는 일반 안내만 표시하고 클릭하면 `/alerts`로 이동해 현재 로그인 계정의 이력을 확인한다. 로그아웃 후에도 일반 안내가 표시될 수 있으므로 공용 기기에서는 연결을 해제한다. 다른 계정에서 직접 연결하면 브라우저의 이전 구독을 해제한 뒤 새 구독을 만들며 서버의 기존 계정 소유권을 이전하지 않는다.
+
+서버 환경 변수 `WEB_PUSH_VAPID_PRIVATE_KEY`는 base64url DER 형식의 P-256 개인키, `WEB_PUSH_VAPID_SUBJECT`는 운영 연락처 `mailto:` URI다. 공개키는 서버에서 파생해 반환한다. 키는 배포마다 생성하지 않고 안전하게 보관한다. 키 교체 후에는 기존 브라우저 재연결이 필요하다. 생성 예시(키 출력은 비밀로 보관):
+
+```powershell
+.venv/Scripts/python -c "import base64; from cryptography.hazmat.primitives.asymmetric import ec; from cryptography.hazmat.primitives.serialization import Encoding,PrivateFormat,NoEncryption; print(base64.urlsafe_b64encode(ec.generate_private_key(ec.SECP256R1()).private_bytes(Encoding.DER,PrivateFormat.PKCS8,NoEncryption())).decode().rstrip('='))"
+```
+
+012 마이그레이션과 의존성 설치 후 사용한다. `STOCK_ALERTS_SEND_ENABLED=false`에서는 푸시도 전송하지 않는다. 이메일 키 없이 푸시만 운영할 수 있다. FCM·Mozilla·Apple·Windows의 알려진 HTTPS 푸시 호스트만 허용하고 리다이렉트를 따라가지 않는다. P-256 구독 키와 16바이트 인증 비밀을 검증하고 pywebpush의 표준 암호화·VAPID 구현을 사용한다. 구독 주소·키는 개인 API와 DB에만 보관하며 이력·운영 집계에는 노출하지 않는다.
+
+브라우저별 접수 상태를 기록한다. 404/410은 만료 연결 제거, 429는 해당 브라우저만 재시도한다. 타임아웃·5xx·전송 중 프로세스 종료는 접수 여부 불명으로 남기며 자동 재전송하지 않는다(Web Push에는 이메일 공급자와 같은 멱등 키 보장이 없음). 동일 알림의 Topic·notification tag도 고정한다. 일부 접수와 전체 접수를 구분하며 공급자 접수는 기기 표시 보장이 아니다. 대기 TTL은 1시간이고 오프라인 기기는 알림을 놓칠 수 있으므로 전체 상세는 화면 이력을 따른다. 기기별 오류를 포함한 이력과 운영자의 푸시 요청·429 수치를 확인한다.
+
+계약 근거: [pywebpush 공식 구현](https://github.com/web-push-libs/pywebpush), [브라우저 구독 API](https://developer.mozilla.org/en-US/docs/Web/API/PushManager/subscribe). 실제 기기·FCM/Apple/Mozilla/Windows 전달은 운영 키 없이 로컬 자동 검사로 대체할 수 없으며 활성화 전 대상 브라우저에서 확인한다.

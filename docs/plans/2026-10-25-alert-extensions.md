@@ -13,8 +13,8 @@
 | 6 | 실적·배당 일정·변경 | 완료, 네 역할 검토·수정 후 팀장 승인 |
 | 7 | 한국·미국 공시 | 완료, 네 역할 검토·수정 후 팀장 승인 |
 | 8 | 채널별 일간·주간 | 완료, 네 역할 재검토 통과 (푸시 채널은 기능9에서 연결) |
-| 9 | 웹 푸시 | 진행 중 |
-| 최종 | 전체 회귀·부하·실사용자 흐름 리뷰 | 대기 |
+| 9 | 웹 푸시 | 완료, 네 역할 재검토 통과 |
+| 최종 | 전체 회귀·부하·실사용자 흐름 리뷰 | 진행 중 |
 
 현재 명세 근거는 2026-10-23-stock-alerts.md와 최신 구현·복구 검토 문서다. 기존 10종 수식, API 생명주기, 거래소 달력, 계정 분리, 저장 복구는 기존 구현·테스트를 재사용한다. 기본 검사: Python 251 통과/21 건너뜀, Node 38 통과. 건너뛴 DB·부하 검사는 격리 PostgreSQL에서 수행한다.
 
@@ -71,3 +71,9 @@ Before review fixes: full Python 355 passed / one load test skipped, Node 42 pas
 All four Orca roles independently reviewed and followed up, clearing required changes; no roles were missing or providers substituted. All feature workers were released and deliveries acknowledged. Reports: `.team-review/extensions-f8-*-followup.md`. Adopted findings: weekly candidates must use discovery time without the daily session-age cap; frequency-only settings preserve received-email unsubscribe links while consent changes and legacy reconfirmations rotate them; document a stopped-Cron schema/code transition. Added failures before fixes, including same-day legacy duplication, ambiguous prior delivery, discovery-window boundaries and legacy API compatibility.
 
 Latest full Python: 372 passed / one opt-in load skipped; related cadence/jobs/API: 28 passed. Node 42 and all three Chrome flows passed. Separately ran the existing PostgreSQL acceptance load: 50 users, 100 instruments, 5,000 rules, exactly 100 fetches and 50 digests, two resumed calls of 159.48 and 60.66 seconds (222.05 seconds including setup). This uses fixed market data and immediate fake mail responses; weekly accumulation, mature ledger, provider delay and mixed-source quota testing remain in final verification. Web Push connects its own channel to cadence in feature 9.
+
+## Feature 9 verification
+
+All four Orca roles independently reviewed and followed up, clearing required changes. No roles were missing or providers substituted; all feature workers were released and deliveries acknowledged. Reports: `.team-review/extensions-f9-*-followup.md`. Adopted findings: same-value settings preserve pending deliveries; reconnect reconciles lost POST responses and settings conflicts before replacing subscriptions; expired/canceled device states finalize with accepted evidence preserved; terminal push unknown digests leave the Cron candidate set while email idempotent retries remain.
+
+Initial failures preceded implementation. Real pywebpush encryption was decrypted locally to verify its generic payload, timeout and redirect behavior. Before review fixes, full Python 387 passed / one opt-in load skipped, Node 43 passed. After fixes, push/jobs/cadence 41 passed, including 20 push tests. Chrome covers explicit permission/denial, independent weekly settings, key replacement, unsubscribe, lost subscription responses and failed settings followed by retry without duplicate subscriptions. The follow-up recommendation to model changing server revisions was added to the browser fixture. Browser push services and Notification/PushManager are mocked; actual browser-provider delivery and iOS installation remain operational checks. Final mixed-load and whole-product user-flow review follow this feature gate.

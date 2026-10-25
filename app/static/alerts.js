@@ -15,6 +15,7 @@ const statuses = {signal:'새 신호',no_signal:'정상 무신호',no_new_sessio
 statuses.deferred='조회 실패·자료 보류, 신호 여부 미확인';
 statuses.missed_window='발송 시간 내 미접수';
 statuses.data_pending='자료 준비 중';
+statuses.partially_accepted='일부 브라우저 접수';statuses.expired='브라우저 연결 만료';
 function busy(delta) {requests += delta; $('loading').hidden = !requests; $('content').setAttribute('aria-busy',String(Boolean(requests))); document.querySelectorAll('button').forEach(b=>b.disabled=Boolean(requests));}
 async function api(path, method='GET', body) {
   busy(1);
@@ -111,7 +112,8 @@ async function history(kind,append=false) {
       (row.payload.result.conditions||[]).forEach(c=>li.append(element('small',describeRule(c.type,c.params)+' · '+describeValues(c.result.values,c.type,c.params,row.payload.currency))));
       if(row.correction) li.append(element('small','자료 정정: '+row.correction.reason));
     } else {
-      li.append(element('span',`${row.digest_date} · 이메일 · ${row.kind==='test'?'테스트':row.kind==='weekly'?'주간':'일간'} · ${statuses[row.status]||row.status}`));
+      li.append(element('span',`${row.digest_date} · ${row.channel==='push'?'웹 푸시':'이메일'} · ${row.kind==='test'?'테스트':row.kind==='weekly'?'주간':'일간'} · ${statuses[row.status]||row.status}`));
+      if(row.devices?.length)li.append(element('small',row.devices.map(d=>`${statuses[d.status]||d.status}: ${d.count}개 브라우저`).join(' · ')));
       if(row.deferredCount) li.append(element('small',row.deferredCount+'개 조건 보류'));
       if(row.error) li.append(element('small',row.error));
     }
@@ -142,8 +144,56 @@ async function refresh() {
     fields(typeInfo().defaults);
   }
   $('content').hidden=false; render();
-  await Promise.all([history('events'),history('digests'),operations()]);
+  await Promise.all([history('events'),history('digests'),operations(),renderPush()]);
 }
+function pushSupported(){return window.isSecureContext&&'serviceWorker' in navigator&&'PushManager' in window&&'Notification' in window;}
+async function renderPush(){
+  $('push-consent').checked=Boolean(state.settings.pushConsent);$('push-frequency').value=state.settings.pushFrequency||'daily';
+  $('push-status').textContent=!state.settings.pushConfigured?'웹 푸시 서버 연결이 아직 설정되지 않았습니다.':!pushSupported()?'이 브라우저 환경에서는 웹 푸시를 지원하지 않습니다.':Notification.permission==='denied'?'브라우저 알림이 차단되었습니다. 사이트 권한에서 허용한 후 다시 연결해주세요.':state.settings.pushConsent?'연결한 브라우저의 푸시 수신이 켜져 있습니다.':'웹 푸시 수신이 꺼져 있습니다.';
+  const result=await api('/api/alerts/push/subscriptions');
+  let local=null;
+  if(pushSupported()){const registration=await navigator.serviceWorker.getRegistration('/alerts');local=registration?await registration.pushManager.getSubscription():null;}
+  state.pushDevices=result.items;state.localPush=local;
+  $('push-devices').replaceChildren();
+  result.items.forEach((device,index)=>{
+    const current=local?.endpoint===device.endpoint;
+    const item=element('li',`${current?'이 브라우저':'브라우저 '+(index+1)} · 연결일 ${new Date(device.created_at).toLocaleDateString('ko-KR')}`);
+    item.append(button('연결 해제',async()=>{await api('/api/alerts/push/subscriptions/'+device.id,'DELETE');if(current)await local.unsubscribe();await renderPush();$('status').textContent='브라우저 연결을 해제했습니다.';}));$('push-devices').append(item);
+  });
+  if(!result.items.length)$('push-devices').append(element('li','연결된 브라우저가 없습니다.'));
+}
+$('push-connect').addEventListener('click',async()=>{
+  if(requests)return;
+  try{
+    if(!state.settings.pushConfigured)throw new Error('웹 푸시 서버 연결이 아직 설정되지 않았습니다.');
+    if(!pushSupported())throw new Error('HTTPS와 웹 푸시를 지원하는 브라우저가 필요합니다.');
+    busy(1);
+    try{
+      // Permission is requested only from this explicit user gesture.
+      if(await Notification.requestPermission()!=='granted')throw new Error('브라우저 알림을 허용하지 않았습니다. 설정을 변경하지 않았습니다.');
+      // Reconcile a lost subscription/settings response before replacing a local subscription.
+      state.settings=await api('/api/alerts/settings');
+      if(!state.settings.pushConfigured)throw new Error('웹 푸시 서버 연결이 아직 설정되지 않았습니다.');
+      state.pushDevices=(await api('/api/alerts/push/subscriptions')).items;
+      const registration=await navigator.serviceWorker.register('/alert-sw.js',{scope:'/alerts'});
+      await navigator.serviceWorker.ready;
+      const key=state.settings.pushPublicKey.replaceAll('-','+').replaceAll('_','/');
+      const applicationServerKey=Uint8Array.from(atob(key+'='.repeat((4-key.length%4)%4)),c=>c.charCodeAt(0));
+      let subscription=await registration.pushManager.getSubscription();
+      const owned=subscription&&state.pushDevices.find(d=>d.endpoint===subscription.endpoint);
+      const previousKey=new Uint8Array(subscription?.options?.applicationServerKey||[]);
+      if(subscription&&(!owned||previousKey.length!==applicationServerKey.length||!previousKey.every((value,index)=>value===applicationServerKey[index]))){
+        if(owned)await api('/api/alerts/push/subscriptions/'+owned.id,'DELETE');
+        await subscription.unsubscribe();subscription=null;
+      }
+      subscription=subscription||await registration.pushManager.subscribe({userVisibleOnly:true,applicationServerKey});
+      await api('/api/alerts/push/subscriptions','POST',subscription.toJSON());
+      await api('/api/alerts/push/settings','PATCH',{revision:state.settings.revision,consent:true,frequency:$('push-frequency').value});
+      await refresh();$('status').textContent='이 브라우저를 연결하고 푸시 수신을 켰습니다.';
+    } finally {busy(-1);}
+  }catch(error){fail(error);}
+});
+$('push-settings-form').addEventListener('submit',async e=>{e.preventDefault();if(requests)return;try{await api('/api/alerts/push/settings','PATCH',{revision:state.settings.revision,consent:$('push-consent').checked,frequency:$('push-frequency').value});await refresh();$('status').textContent='푸시 수신 설정을 저장했습니다.';}catch(error){fail(error);}});
 async function operations() {
   if(!state.isOwner)return;
   $('operations-panel').hidden=false;
@@ -155,8 +205,9 @@ async function operations() {
       const li=element('li'),detail=element('div',run.digest_date,'detail');
       const taskNames={fetch:'자료 조회',evaluate:'규칙 평가'},taskStatuses={done:'완료',pending:'대기',deferred:'보류'};
       detail.append(element('small',run.tasks.map(t=>`${taskNames[t.kind]||t.kind} ${taskStatuses[t.status]||t.status}: ${t.count}건`).join(' · ')||'작업 없음'));
-      detail.append(element('small',run.deliveries.map(d=>`${statuses[d.status]||d.status}: ${d.count}건`).join(' · ')||'발송 기록 없음'));
+      detail.append(element('small',run.deliveries.map(d=>`${d.channel==='push'?'웹 푸시 · ':''}${statuses[d.status]||d.status}: ${d.count}건`).join(' · ')||'발송 기록 없음'));
       detail.append(element('small',`누적 처리 ${Number(run.duration_seconds).toFixed(1)}초 · 시세 요청 ${run.data_calls||0}회 / HTTP 429 ${run.data_429||0}회 · 메일 요청 ${run.email_calls||0}회 / HTTP 429 ${run.email_429||0}회`));
+      detail.append(element('small',`푸시 요청 ${run.push_calls||0}회 / HTTP 429 ${run.push_429||0}회`));
       detail.append(element('small',`시세 제한(로컬 quota 포함) ${run.rate_limit_count}회 · 가장 오래된 미처리 시작: ${run.oldestPending?new Date(run.oldestPending).toLocaleString('ko-KR',{timeZone:'Asia/Seoul'})+' (한국시간)':'없음'}`));
       li.append(detail);$('operations').append(li);
     });

@@ -67,7 +67,7 @@ def test_operations_pending_mail_and_test_mail_are_separate(db):
         for kind,status in [('test','accepted'),('daily','retryable_failed')]:
             conn.execute("INSERT INTO alert_digests(id,user_id,digest_date,kind,payload,status,created_at) VALUES(%s,%s,current_date,%s,'{}',%s,now()-interval '1 hour')", (uuid4(),uid,kind,status))
     run = client.get('/api/alerts/operations').json()['runs'][0]
-    assert run['deliveries'] == [{'status':'retryable_failed','count':1}]
+    assert run['deliveries'] == [{'channel':'email','status':'retryable_failed','count':1}]
     assert run['oldestPending'] < run['cutoff']
 
 

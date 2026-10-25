@@ -9,6 +9,7 @@ description = "FastAPI app for backtesting US stock portfolios."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+  "pywebpush>=2.5,<3",
   "psycopg[binary]>=3.3,<4",
   "exchange_calendars>=4.13,<5",
   "svix>=1.99,<2",

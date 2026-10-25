@@ -22,22 +22,22 @@ def operations(request: Request):
         raise HTTPException(403, "운영자만 확인할 수 있습니다.")
     with database() as conn:
         runs = conn.execute("""SELECT id,digest_date,status,cutoff,deadline,lease_until,
-            duration_seconds,rate_limit_count,data_calls,data_429,email_calls,email_429
+            duration_seconds,rate_limit_count,data_calls,data_429,email_calls,email_429,push_calls,push_429
             FROM alert_runs ORDER BY digest_date DESC LIMIT 14""").fetchall()
         ids = [r["id"] for r in runs]
         days = [r["digest_date"] for r in runs]
         tasks = conn.execute("""SELECT run_id,kind,status,count(*) AS count,
             min(created_at) FILTER (WHERE status='pending') AS oldest FROM alert_tasks
             WHERE run_id=ANY(%s) GROUP BY run_id,kind,status ORDER BY kind,status""", (ids,)).fetchall()
-        deliveries = conn.execute("""SELECT digest_date,status,count(*) AS count,
+        deliveries = conn.execute("""SELECT digest_date,channel,status,count(*) AS count,
             min(created_at) FILTER (WHERE status IN ('pending','sending','retryable_failed','unknown')) AS oldest
             FROM alert_digests WHERE digest_date=ANY(%s) AND kind<>'test'
-            GROUP BY digest_date,status ORDER BY status""", (days,)).fetchall()
+            GROUP BY digest_date,channel,status ORDER BY channel,status""", (days,)).fetchall()
         for run in runs:
             rt = [t for t in tasks if t["run_id"] == run["id"]]
             rd = [d for d in deliveries if d["digest_date"] == run["digest_date"]]
             run["tasks"] = [{k:t[k] for k in ("kind","status","count")} for t in rt]
-            run["deliveries"] = [{k:d[k] for k in ("status","count")} for d in rd]
+            run["deliveries"] = [{k:d[k] for k in ("channel","status","count")} for d in rd]
             run["oldestPending"] = min((r["oldest"] for r in rt + rd if r["oldest"]), default=None)
     return {"runs": runs}
 
@@ -54,6 +54,29 @@ class SettingsInput(Input):
 
 class WatchInput(Input):
     symbol: str = Field(min_length=1, max_length=20)
+
+
+class PushKeys(Input):
+    p256dh: str = Field(min_length=1,max_length=128)
+    auth: str = Field(min_length=1,max_length=64)
+
+
+class PushSubscription(Input):
+    endpoint: str = Field(min_length=1,max_length=2048)
+    keys: PushKeys
+    expirationTime: float | None = None
+
+    @model_validator(mode='after')
+    def validate_push(self):
+        from app.services.alert_push import validate_subscription
+        validate_subscription(self.model_dump())
+        return self
+
+
+class PushSettings(Input):
+    revision: int = Field(ge=1)
+    consent: bool
+    frequency: Literal['daily','weekly']
 
 
 class RuleInput(Input):
@@ -103,11 +126,21 @@ def alerts_page():
     return FileResponse(STATIC_DIR / "alerts.html")
 
 
+@router.get('/alert-sw.js')
+def alert_worker():
+    from app.main import STATIC_DIR
+    return FileResponse(STATIC_DIR/'alert-sw.js',media_type='text/javascript')
+
+
 @router.get("/api/alerts/settings")
 def settings(request: Request):
     u = user(request)
+    from app.services.alert_push import public_key
+    key=public_key()
     return {"email": u["email"], "consent": u["consent"], "revision": u["revision"],
             "emailFrequency":u['email_frequency'],
+            'pushConsent':u['push_consent'],'pushFrequency':u['push_frequency'],
+            'pushConfigured':bool(key),'pushPublicKey':key,
             "suppressed": u["suppressed"], "sendTime": "한국시간 오전 8시대 · "+('월요일 주간 요약' if u['email_frequency']=='weekly' else '새 신호가 있는 날만'),
             "sendingEnabled": os.getenv("STOCK_ALERTS_SEND_ENABLED") == "true",
             "calendarConfigured": bool(os.getenv('BENZINGA_API_KEY') and os.getenv('BENZINGA_REQUESTS_PER_MINUTE')),
@@ -133,6 +166,53 @@ def set_settings(payload: SettingsInput, request: Request):
             if is_owner(request.session["user"]):
                 conn.execute("UPDATE alert_users SET legacy_consolidated=true WHERE id=%s", (u["id"],))
     return {"revision": payload.revision + 1, "consent": payload.consent}
+
+
+@router.patch('/api/alerts/push/settings')
+def set_push_settings(payload:PushSettings,request:Request):
+    from app.services.alert_push import public_key
+    u=user(request)
+    with database() as conn:
+        current=lock_user(conn,u['id']);check_revision(current,payload.revision)
+        if payload.consent and (not public_key() or not conn.execute('SELECT id FROM alert_push_subscriptions WHERE user_id=%s LIMIT 1',(u['id'],)).fetchone()):
+            raise HTTPException(409,'이 브라우저의 푸시 연결을 먼저 허용해주세요.')
+        changed=current['push_consent']!=payload.consent or current['push_frequency']!=payload.frequency
+        conn.execute('UPDATE alert_users SET push_consent=%s,push_frequency=%s,push_version=push_version+%s,revision=revision+1 WHERE id=%s',(payload.consent,payload.frequency,int(changed),u['id']))
+    return {'revision':payload.revision+1}
+
+
+@router.get('/api/alerts/push/subscriptions')
+def push_subscriptions(request:Request):
+    u=user(request)
+    with database() as conn:
+        rows=conn.execute('SELECT id,endpoint,created_at FROM alert_push_subscriptions WHERE user_id=%s ORDER BY created_at',(u['id'],)).fetchall()
+    return {'items':rows}
+
+
+@router.post('/api/alerts/push/subscriptions')
+def subscribe_push(payload:PushSubscription,request:Request):
+    from app.services.alert_push import public_key
+    if not public_key():raise HTTPException(503,'웹 푸시 서버 연결이 설정되지 않았습니다.')
+    u=user(request)
+    with database() as conn:
+        lock_user(conn,u['id'])
+        row=conn.execute('SELECT id,user_id FROM alert_push_subscriptions WHERE endpoint=%s FOR UPDATE',(payload.endpoint,)).fetchone()
+        if row and row['user_id']!=u['id']:raise HTTPException(409,'다른 계정에 연결된 브라우저입니다. 기존 계정에서 연결 해제 후 다시 등록해주세요.')
+        if not row and conn.execute('SELECT count(*) AS n FROM alert_push_subscriptions WHERE user_id=%s',(u['id'],)).fetchone()['n']>=5:
+            raise HTTPException(422,'계정당 브라우저는 최대 5개입니다. 사용하지 않는 연결을 해제해주세요.')
+        identity=row['id'] if row else uuid4()
+        conn.execute('''INSERT INTO alert_push_subscriptions(id,user_id,endpoint,keys) VALUES(%s,%s,%s,%s)
+            ON CONFLICT(id) DO UPDATE SET keys=EXCLUDED.keys''',(identity,u['id'],payload.endpoint,json_value(payload.keys.model_dump())))
+    return {'id':str(identity)}
+
+
+@router.delete('/api/alerts/push/subscriptions/{identity}')
+def unsubscribe_push(identity:UUID,request:Request):
+    u=user(request)
+    with database() as conn:
+        lock_user(conn,u['id'])
+        if not conn.execute('DELETE FROM alert_push_subscriptions WHERE id=%s AND user_id=%s RETURNING id',(identity,u['id'])).fetchone():raise HTTPException(404,'브라우저 연결을 찾을 수 없습니다.')
+    return {'deleted':True}
 
 
 @router.get("/api/alerts/instrument")
@@ -325,8 +405,11 @@ def events(request: Request, cursor: UUID | None = None, limit: int = Query(50, 
 @router.get("/api/alerts/digests")
 def digests(request: Request, cursor: UUID | None = None, limit: int = Query(50, ge=1, le=100)):
     result = history("alert_digests", request, cursor, limit)
+    with database() as conn:
+        devices=conn.execute('SELECT digest_id,status,count(*) AS count FROM alert_push_deliveries WHERE digest_id=ANY(%s::uuid[]) GROUP BY digest_id,status',([str(r['id']) for r in result['items']],)).fetchall()
     # Never return unsubscribe credentials embedded in frozen outbound bodies.
     for row in result["items"]:
+        if row['channel']=='push':row['devices']=[{'status':d['status'],'count':d['count']} for d in devices if d['digest_id']==row['id']]
         row["deferredCount"] = row["payload"].get("deferred", 0)
         row.pop("payload", None)
     return result
@@ -337,11 +420,11 @@ def delete_account(request: Request):
     u = user(request)
     with database() as conn:
         lock_user(conn, u["id"])
-        for table in ("alert_events", "alert_digests", "alert_rules", "alert_watchlist"):
+        for table in ("alert_push_subscriptions", "alert_events", "alert_digests", "alert_rules", "alert_watchlist"):
             conn.execute(f"DELETE FROM {table} WHERE user_id=%s", (u["id"],))
         # Preserve the legacy migration tombstone so unsubscribing cannot revive old mail.
         conn.execute("""UPDATE alert_users SET email='',consent=false,suppressed='deleted',revision=revision+1,
-                     unsubscribe_version=unsubscribe_version+1 WHERE id=%s""", (u["id"],))
+                     unsubscribe_version=unsubscribe_version+1,push_consent=false,push_version=push_version+1 WHERE id=%s""", (u["id"],))
     return {"deleted": True}
 
 
@@ -355,14 +438,14 @@ def stock_alert_cron():
 def unsubscribe_page(token: str):
     from app.services.alert_email import unsubscribe
     unsubscribe(token)
-    return "<!doctype html><html lang='ko'><meta charset='utf-8'><meta name='viewport' content='width=device-width'><title>종가 알림 해지</title><h1>종가 알림 수신 해지</h1><p>관심종목 알림 전체를 중지합니다. 이미 접수된 메일은 한 통 도착할 수 있습니다.</p><form method='post'><button>전체 알림 해지</button></form></html>"
+    return "<!doctype html><html lang='ko'><meta charset='utf-8'><meta name='viewport' content='width=device-width'><title>이메일 알림 해지</title><h1>이메일 알림 수신 해지</h1><p>관심종목 이메일 전체를 중지합니다. 웹 푸시는 알림 설정에서 별도로 해제합니다. 이미 접수된 메일은 한 통 도착할 수 있습니다.</p><form method='post'><button>이메일 알림 해지</button></form></html>"
 
 
 @router.post("/notifications/unsubscribe/{token}", response_class=HTMLResponse)
 def unsubscribe_apply(token: str):
     from app.services.alert_email import unsubscribe
     unsubscribe(token, apply=True)
-    return "<!doctype html><html lang='ko'><meta charset='utf-8'><title>해지 완료</title><h1>종가 알림을 해지했습니다.</h1><a href='/alerts'>알림 설정</a></html>"
+    return "<!doctype html><html lang='ko'><meta charset='utf-8'><title>해지 완료</title><h1>이메일 알림을 해지했습니다.</h1><p>웹 푸시는 알림 설정에서 별도로 해제할 수 있습니다.</p><a href='/alerts'>알림 설정</a></html>"
 
 
 @router.post("/api/webhooks/alert-email")

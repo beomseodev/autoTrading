@@ -79,7 +79,7 @@ def make_payload(user, day, events, deferred=0, legacy=None, test=False,frequenc
         lines.append(f"자료 미확정·조회 실패 등으로 {deferred}개 조건을 보류했습니다. 화면에서 확인해주세요.")
     if test:
         lines.append("메일 연결 테스트입니다. 종목 신호가 발생했다는 의미가 아닙니다.")
-    lines.extend(["설정과 이력: " + base + "/alerts", "전체 알림 해지: " + link,
+    lines.extend(["설정과 이력: " + base + "/alerts", "이메일 알림 해지: " + link,
                   "해지 전에 이미 접수된 메일은 한 통 도착할 수 있습니다."])
     text = "\n".join(lines)
     return {"from": os.environ["ALERT_EMAIL_FROM"], "to": [user["email"]],
