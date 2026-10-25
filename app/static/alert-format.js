@@ -5,6 +5,7 @@ function describeRule(kind,p) {
   const direction={up:'상향 돌파',down:'하향 돌파',both:'상향 또는 하향 돌파'}[p.direction]||'';
   const ma=`${p.period}거래일 ${p.average==='ema'?'지수':'단순'}이동평균`;
   const descriptions={
+    filing:'한국·미국 일반주의 새 공시·정정 제목, 접수일과 원문 링크를 확인합니다. 첫 정상 조회를 기준으로 저장하고 이후 처음 확인한 공시를 알립니다. 정지 후 재개도 기준을 다시 저장합니다. ETF는 지원하지 않으며 공시 내용의 투자 판단은 제공하지 않습니다.',
     earnings_event:`미국 일반주 실적 발표일 ${p.daysBefore}일 전 아침 알림과 추적 중인 일정 변경·취소. 공급자의 현지 날짜이며 잠정 일정은 따로 표시합니다. ETF·한국 종목은 지원하지 않습니다.`,
     dividend_event:`미국 종목 ${p.dateField==='payDate'?'배당 지급일':'배당락일'} ${p.daysBefore}일 전 아침 알림과 추적 중인 일정 변경·취소. 공급자의 현지 날짜이며 잠정 일정은 따로 표시합니다. 한국 종목은 지원하지 않습니다.`,
     dividend_change:`미국 종목의 확정 정기 현금배당을 직전 같은 통화·지급 주기와 비교해 ${p.thresholdPct}% 이상 ${p.direction==='up'?'인상':p.direction==='down'?'삭감':'인상·삭감'} 시 알립니다. 미래 배당락 일정 중 등록 이후 확인된 변경만 비교하며 분할이 끼면 보류합니다.`,

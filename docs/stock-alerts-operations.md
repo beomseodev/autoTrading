@@ -89,3 +89,13 @@ Chrome 검사는 Windows의 기본 Chrome 실행 경로를 사용한다. 화면 
 알림은 공급자 현지 날짜를 기준으로 지정한 달력일 전 한국시간 아침에 점검한다. 날짜/내용 변경·삭제는 이미 추적하던 일정에서만 알린다. 인상·삭감은 등록 이후 갱신된 미래 배당락일의 확정 정기 현금배당을 직전 같은 통화·주기의 배당과 비교한다. 특별배당·분할 전후 금액은 비교하지 않는다. 일정은 과거 400일~미래 366일의 공급자 조회 범위이며 실제 계좌의 배당 수령 여부를 판정하지 않는다.
 
 계약 근거: [실적](https://docs.benzinga.com/api-reference/calendar-api/get-earnings), [배당](https://docs.benzinga.com/api-reference/calendar-api/get-dividends), [삭제](https://docs.benzinga.com/api-reference/calendar-api/get-removed). 실제 유료 계정 호출은 개발 검증에 포함하지 않았다.
+
+## 한국·미국 공시
+
+한국 일반주는 DART `DART_API_KEY`, 미국 일반주는 회사명·연락 이메일을 포함한 `SEC_USER_AGENT`가 필요하다. ETF는 지원하지 않는다. SEC는 앱 전체에서 초당 5건, DART는 분당 60건으로 제한하며 공급자 제한 응답은 재시도 대기로 구분한다. 호출 자격과 기업 식별자 매핑 실패를 정상 무공시로 취급하지 않는다.
+
+종목-회사 식별자 목록은 하루 한 번 공유 조회한다. SEC는 공식 회사별 submissions의 최소 최근 1년 목록에서 최근 14일을 선택하며, DART는 최근 14일을 100건씩 조회해 모든 페이지가 완료된 뒤만 평가한다. 정정보고서도 포함한다. 날짜는 각 기관의 접수일이며 정확한 접수 시각을 추정하지 않는다. 첫 정상 조회와 재개 후 첫 조회는 기준만 저장하고, 이후 처음 확인한 새 접수번호 또는 같은 번호의 표시 정보 변경을 알린다. 첫 기준 날짜 이전 공시는 과거 이력으로 제외하며 누락만으로 철회·취소를 추정하지 않는다. 제목·접수일·원문 링크만 전달하고 내용 해석·투자 판단은 하지 않는다.
+
+공식 계약: [SEC API](https://www.sec.gov/search-filings/edgar-application-programming-interfaces), [SEC 접근 규칙](https://www.sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data), [DART 공시검색](https://opendart.fss.or.kr/guide/detail.do?apiGrpCd=DS001&apiId=2019001), [DART 고유번호](https://opendart.fss.or.kr/guide/detail.do?apiGrpCd=DS001&apiId=2019018). 인증키를 이용한 실제 호출·운영 발송은 개발 검증에서 제외한다.
+
+최초 기준 날짜는 SEC는 미국 동부시간, DART는 한국시간으로 계산한다. 한국의 다음 날짜 아침 이후 미국의 같은 접수일에 추가된 공시도 처음 확인할 때 알린다. DART 회사 목록의 XML 오류도 인증 오류·요청 제한·시스템 점검을 구분하며 점검/일시 오류는 같은 실행일에 재시도한다.

@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import pandas as pd
 from fastapi import HTTPException
 
-from app.alert_rules import evaluate_rule, LABELS, contains_price_rule, minimum_bars, HOLDING_TYPES, CALENDAR_TYPES
+from app.alert_rules import evaluate_rule, LABELS, contains_price_rule, minimum_bars, HOLDING_TYPES, CALENDAR_TYPES, INFORMATION_TYPES
 from app.services.alert_data import (DataPending, adjusted_bars, calendar, expected_session,
                                     fingerprint, load_daily_bars, session_close)
 from app.services.alert_email import email_configured, make_payload, send_payload
@@ -67,6 +67,9 @@ def initialize(now):
                            for k, v in rule.items()}
                 conn.execute("""INSERT INTO alert_tasks(id,run_id,kind,target_id,payload) VALUES(%s,%s,'evaluate',%s,%s)
                     ON CONFLICT DO NOTHING""", (uuid4(), run_id, rule["id"], json_value(payload)))
+                if rule['kind']=='filing':
+                    from app.services.alert_filings import enqueue
+                    enqueue(conn,rule,run_id);continue
                 if rule['kind'] in CALENDAR_TYPES:
                     from app.services.alert_calendar import enqueue
                     enqueue(conn,rule,run_id)
@@ -129,7 +132,7 @@ def mark_corrections(conn, instrument_id, cached, snapshot, new_hash):
     events = conn.execute("""SELECT e.*,r.kind FROM alert_events e JOIN alert_rules r ON r.id=e.rule_id
         WHERE (e.instrument_id=%s OR e.payload->>'benchmarkId'=%s OR e.payload->'sourceIds' ? %s) AND e.created_at>=now()-interval '180 days'""", (instrument_id,str(instrument_id),str(instrument_id))).fetchall()
     for event in events:
-        if event['kind'] in CALENDAR_TYPES:
+        if event['kind'] in INFORMATION_TYPES:
             info=event['payload'].get('information',{})
             if event['kind']=='dividend_change' and actions!=old['splits'] and info.get('comparisonDate') and any(info['comparisonDate']<s['date']<=info['date'] for s in actions+old['splits']):
                 conn.execute('UPDATE alert_events SET correction=%s WHERE id=%s',(json_value({'reason':'배당 비교 구간 분할 자료 정정'}),event['id']))
@@ -174,6 +177,9 @@ def evaluation_bars(rule, snapshot, reference, day):
 
 def evaluate_task(task, run, token,portfolio_context=None):
     payload = task["payload"]
+    if payload['kind']=='filing':
+        from app.services.alert_filings import evaluate_task as evaluate_filing
+        return evaluate_filing(task,run,token)
     if payload['kind'] in CALENDAR_TYPES:
         from app.services.alert_calendar import evaluate_task as evaluate_calendar_task
         return evaluate_calendar_task(task,run,token)
@@ -342,7 +348,7 @@ def prepare_digests(run, token, now, started):
 
 
 def calendar_from_event(event, run):
-    if event['payload'].get('kind') in HOLDING_TYPES+CALENDAR_TYPES:
+    if event['payload'].get('kind') in HOLDING_TYPES+INFORMATION_TYPES:
         return range(max(0,(run['digest_date']-event['session_date']).days-2))
     meta = event["metadata"]
     target = expected_session(meta, run["cutoff"])
@@ -424,6 +430,13 @@ def process_alert_run(*, now=None):
                     result=evaluate_calendar(rule['kind'],rule['params'],items,rule['evaluation_state'],now.astimezone(KST).date(),rule['activated_at'],splits=rule['snapshot']['splits'] if rule['snapshot'] else ())
                     status='data_pending' if result['pending'] else 'signal' if result['events'] else 'no_signal'
                 except DataPending:status='data_pending'
+            if rule['kind']=='filing':
+                from app.services.alert_filings import cached_items,evaluate_filings,source_day
+                try:
+                    with database() as conn:items=cached_items(conn,rule['instrument_id'],now.astimezone(KST).date())
+                    result=evaluate_filings(items,rule['evaluation_state'],now.astimezone(KST).date(),baseline_day=source_day(rule['metadata'],now))
+                    status='signal' if result['events'] else 'no_signal'
+                except DataPending:status='data_pending'
             if rule["kind"]=="retest" and rule["snapshot"]:
                 snap=rule["snapshot"]
                 pending=[b["date"] for b in snap["raw"] if (not rule["last_session"] or b["date"]>str(rule["last_session"]))
@@ -465,7 +478,7 @@ def process_alert_run(*, now=None):
             except DataPending as exc:contexts[str(owner['id'])]=exc
         with database() as conn:
             tasks = conn.execute("SELECT * FROM alert_tasks WHERE run_id=%s AND status='pending' AND next_attempt_at<=now() ORDER BY kind,id", (run["id"],)).fetchall()
-        for task in sorted(tasks, key=lambda x: not x['kind'].startswith('fetch')):
+        for task in sorted(tasks, key=lambda x: (not x['kind'].startswith('fetch'),x['kind']!='fetch_filing_map')):
             if time.monotonic() - started > 150:
                 break
             try:
@@ -474,12 +487,15 @@ def process_alert_run(*, now=None):
                         continue
                     if task['kind']=='fetch':fetch_task(task, run, token, now)
                     else:
-                        from app.services.alert_calendar import fetch_task as fetch_calendar
-                        fetch_calendar(task,run,token)
-                        while time.monotonic()-started<120:
+                        if task['kind'] in ('fetch_filing','fetch_filing_map'):
+                            from app.services.alert_filings import fetch_task as fetch_information
+                        else:
+                            from app.services.alert_calendar import fetch_task as fetch_information
+                        progressed=fetch_information(task,run,token)
+                        while progressed is not False and time.monotonic()-started<120:
                             with database() as conn:task=conn.execute('SELECT * FROM alert_tasks WHERE id=%s',(task['id'],)).fetchone()
                             if task['status']!='pending':break
-                            fetch_calendar(task,run,token)
+                            progressed=fetch_information(task,run,token)
                 else:
                     if task['payload']['kind'] in HOLDING_TYPES:
                         evaluate_task(task,run,token,portfolio_context=contexts.get(task['payload']['user_id']))

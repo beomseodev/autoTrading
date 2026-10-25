@@ -182,6 +182,9 @@ class DividendChange(Direction):
 CALENDAR_TYPES=('earnings_event','dividend_event','dividend_change')
 PARAMS.update(earnings_event=CalendarReminder,dividend_event=DividendReminder,dividend_change=DividendChange)
 LABELS.update(earnings_event='실적 일정·변경 (미국 주식)',dividend_event='배당 일정·변경 (미국)',dividend_change='정기 현금배당 인상·삭감 (미국)')
+PARAMS['filing']=Params
+LABELS['filing']='새 공시·정정 (한국·미국 일반주)'
+INFORMATION_TYPES=CALENDAR_TYPES+('filing',)
 
 
 def contains_price_rule(kind, params):
@@ -217,7 +220,7 @@ def evaluate_rule(kind, params, bars, *, state=None, session_age=None):
     p = normalize_rule(kind, params)
     result = {"status": "insufficient_data", "triggers": [], "values": {}, "reason": "계산 자료 부족"}
     if kind in HOLDING_TYPES:return {**result,'reason':'계정에 저장한 보유자산 평가가 필요합니다.'}
-    if kind in CALENDAR_TYPES:return {**result,'reason':'일정 공급자 자료가 필요합니다.'}
+    if kind in INFORMATION_TYPES:return {**result,'reason':'일정·공시 공급자 자료가 필요합니다.'}
     if len(bars) < minimum_bars(kind, p):
         return result
     if kind == "retest":

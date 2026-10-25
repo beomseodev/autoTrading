@@ -109,6 +109,7 @@ def settings(request: Request):
             "suppressed": u["suppressed"], "sendTime": "한국시간 오전 8시대 · 새 신호가 있는 날만",
             "sendingEnabled": os.getenv("STOCK_ALERTS_SEND_ENABLED") == "true",
             "calendarConfigured": bool(os.getenv('BENZINGA_API_KEY') and os.getenv('BENZINGA_REQUESTS_PER_MINUTE')),
+            "filingsConfigured": {'sec':bool(os.getenv('SEC_USER_AGENT')),'dart':bool(os.getenv('DART_API_KEY'))},
             "types": [{"type": k, "label": LABELS[k], "composable": k in CORE_TYPES, "defaults": normalize_rule(k, {"price": 100} if k == "price_cross" else {})} for k in PARAMS]}
 
 
@@ -216,6 +217,10 @@ def add_rules(payload: RuleInput, request: Request):
                 from app.services.alert_calendar import supported
                 meta=conn.execute('SELECT metadata FROM alert_instruments WHERE id=%s',(instrument,)).fetchone()['metadata']
                 if not supported(payload.type,meta):raise HTTPException(422,'일정은 미국 USD 종목만 지원하며, ETF 실적 발표는 지원하지 않습니다.')
+            if payload.type=='filing':
+                from app.services.alert_filings import supported
+                meta=conn.execute('SELECT metadata FROM alert_instruments WHERE id=%s',(instrument,)).fetchone()['metadata']
+                if not supported(meta):raise HTTPException(422,'공시는 한국·미국 일반주만 지원합니다. ETF는 지원하지 않습니다.')
             reference_id=register_reference(conn,reference,instrument)
             existing = conn.execute("SELECT * FROM alert_rules WHERE user_id=%s AND instrument_id=%s AND fingerprint=%s FOR UPDATE",
                                     (u["id"], instrument, rule_hash(payload.type, payload.params))).fetchone()

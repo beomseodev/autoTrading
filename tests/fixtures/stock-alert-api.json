@@ -195,6 +195,12 @@
         "direction": "both",
         "thresholdPct": 0
       }
+    },
+    {
+      "type": "filing",
+      "label": "새 공시·정정 (한국·미국 일반주)",
+      "composable": false,
+      "defaults": {}
     }
   ]
 }

@@ -110,6 +110,15 @@ const server = http.createServer((req,res)=>{
     assert(await run("document.getElementById('events').textContent.includes('설정 변경·정지로 취소된 신호')"));
     await run("events=[];document.querySelectorAll('#rules button')[2].click()");
     await until("rules.length===0 && document.getElementById('loading').hidden");
+    await run("document.getElementById('kind').value='filing';document.getElementById('kind').dispatchEvent(new Event('change'));document.getElementById('rule-form').requestSubmit()");
+    await until("rules.length===1 && document.getElementById('loading').hidden");
+    assert(await run("document.getElementById('rules').textContent.includes('첫 정상 조회')"));
+    await run("events=[{session_date:'2026-10-24',payload:{symbol:'AAPL',label:'새 공시',kind:'filing',params:{},information:{title:'8-K · Current report',details:'SEC 접수일 2026-10-23',sourceUrl:'https://www.sec.gov/Archives/edgar/data/320193/000032019326000123/aapl.htm'},result:{values:{}}}}];document.getElementById('refresh').click()");
+    await until("document.getElementById('loading').hidden");
+    assert.equal(await run("new URL(document.querySelector('#events a').href).hostname"),'www.sec.gov');
+    assert(await run("document.getElementById('events').textContent.includes('8-K')"));
+    await run("events=[];document.querySelectorAll('#rules button')[2].click()");
+    await until("rules.length===0 && document.getElementById('loading').hidden");
     await run("document.getElementById('kind').value='price_ma_cross';document.getElementById('kind').dispatchEvent(new Event('change'));document.getElementById('rule-form').requestSubmit()");
     await until("document.querySelectorAll('#rules button').length===3 && document.getElementById('loading').hidden");
     assert.equal(await run("rules[0].params.period"),200);

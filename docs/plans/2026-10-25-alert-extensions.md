@@ -11,8 +11,8 @@
 | 4 | 동일 시장·통화 상대 수익률 | 완료, 네 역할 검토·수정 후 팀장 승인 |
 | 5 | 저장 보유자산 기반 평단·비중 | 완료, 네 역할 재검토 통과 |
 | 6 | 실적·배당 일정·변경 | 완료, 네 역할 검토·수정 후 팀장 승인 |
-| 7 | 한국·미국 공시 | 진행 중 |
-| 8 | 채널별 일간·주간 | 대기 |
+| 7 | 한국·미국 공시 | 완료, 네 역할 검토·수정 후 팀장 승인 |
+| 8 | 채널별 일간·주간 | 진행 중 |
 | 9 | 웹 푸시 | 대기 |
 | 최종 | 전체 회귀·부하·실사용자 흐름 리뷰 | 대기 |
 
@@ -57,3 +57,11 @@ Possibility and scale follow-ups cleared required changes. Critic and outsider f
 Before review fixes: full Python 333 passed / one load test skipped, Node 42 passed, Chrome passed. Related calendar/jobs tests after primary fixes: 35 passed. Final calendar suite: 23 passed, including 9,000 removals plus terminal empty page through the actual cron, prior-only correction DB updates, relevant split corrections, threshold boundaries, dry-run parity, and stale recovery. Updated Chrome passed with canceled information history checks.
 
 Benzinga contracts and supported US instruments are documented in `docs/stock-alerts-operations.md`. No paid account/API/email was activated. Direct provider docs do not specify the earnings time zone, so the UI preserves the supplied time and directs users to confirm the zone at source. Final load verification must include calendar/dividend comparisons, shared removal data and correction history; actual licensed coverage remains an operational integration check.
+
+## Feature 7 verification
+
+All four Orca roles independently reviewed. Scale cleared required code changes after confirming ZIP error isolation; critic/possibility/outsider follow-ups cleared the SEC source-date and DART XML error-classification fixes. No roles were missing and no provider was substituted. Orca could not recognize three settled terminals for reuse, so they were released and the same follow-up tasks ran in new Codex terminals. All workers and deliveries were settled/released/acknowledged. Reports: `.team-review/extensions-f7-*.md`.
+
+SEC CIK and DART corporate-code mappings are shared, filings retain account-specific baseline/state/events, first successful collection and resume establish a baseline without historical delivery, and same-source-date filings discovered after that baseline remain eligible. DART maintenance and server errors retry within the same run. XML declarations, invalid paths/identifiers and malformed mapping data are rejected. JSON syntax failures intentionally remain retryable lookup failures, never normal no-filings results; the stricter malformed-response statement applies to XML. No existing deployed filing state needed migration because this feature is not deployed.
+
+Before review fixes: full Python 355 passed / one load test skipped, Node 42 passed, Chrome passed. Source-date and XML failures were reproduced before fixes. Final filings/jobs tests: 34 passed, including shared fetch/account isolation, two-page atomic cache completion, maintenance recovery, source-date boundary and malformed XML/encoding. Provider quota throughput remains part of final mixed-load testing. Actual SEC/DART credentials and delivery were not exercised.
