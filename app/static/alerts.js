@@ -111,7 +111,7 @@ async function history(kind,append=false) {
       (row.payload.result.conditions||[]).forEach(c=>li.append(element('small',describeRule(c.type,c.params)+' · '+describeValues(c.result.values,c.type,c.params,row.payload.currency))));
       if(row.correction) li.append(element('small','자료 정정: '+row.correction.reason));
     } else {
-      li.append(element('span',`${row.digest_date} · ${row.kind==='test'?'테스트 · ':''}${statuses[row.status]||row.status}`));
+      li.append(element('span',`${row.digest_date} · 이메일 · ${row.kind==='test'?'테스트':row.kind==='weekly'?'주간':'일간'} · ${statuses[row.status]||row.status}`));
       if(row.deferredCount) li.append(element('small',row.deferredCount+'개 조건 보류'));
       if(row.error) li.append(element('small',row.error));
     }
@@ -132,6 +132,8 @@ async function refresh() {
   }
   $('email').textContent='수신 주소: '+settings.email;
   $('consent').checked=settings.consent;
+  $('email-frequency').value=settings.emailFrequency||'daily';
+  $('frequency-note').textContent=settings.emailFrequency==='weekly'?'주간 요약 · 매주 월요일 한국시간 오전 8시대 · 최근 7일 새 신호가 있을 때 한 통':'일간 요약 · 한국시간 오전 8시대 · 새 신호가 있는 날 한 통';
   $('delivery-note').textContent=settings.suppressed?'발송 중지: '+settings.suppressed:settings.sendingEnabled?'운영 발송이 활성화되어 있습니다.':'실제 메일 발송은 아직 꺼져 있습니다. 조건을 저장할 수 있습니다.';
   if(!settings.calendarConfigured)$('delivery-note').textContent+=' 실적·배당 일정 공급자 연결은 설정되지 않았습니다.';
   if(!settings.filingsConfigured?.sec||!settings.filingsConfigured?.dart)$('delivery-note').textContent+=' 공시 연결: SEC '+(settings.filingsConfigured?.sec?'설정됨':'미설정')+', DART '+(settings.filingsConfigured?.dart?'설정됨':'미설정')+'.';
@@ -161,7 +163,7 @@ async function operations() {
   } catch(error){$('operations-status').textContent='운영 상태 조회 실패: '+error.message;}
 }
 $('params').addEventListener('input',()=>{$('rule-meaning').textContent=describeRule($('kind').value,state.readParams());});
-$('settings-form').addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/alerts/settings','PATCH',{revision:state.settings.revision,consent:$('consent').checked});await refresh();$('status').textContent='수신 설정을 저장했습니다.';}catch(error){fail(error);}});
+$('settings-form').addEventListener('submit',async e=>{e.preventDefault();try{await api('/api/alerts/settings','PATCH',{revision:state.settings.revision,consent:$('consent').checked,emailFrequency:$('email-frequency').value});await refresh();$('status').textContent='수신 설정을 저장했습니다.';}catch(error){fail(error);}});
 $('watch-form').addEventListener('submit',async e=>{
   e.preventDefault();if(requests)return;
   const query=$('symbol').value.trim(),version=searchVersion;

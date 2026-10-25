@@ -301,10 +301,12 @@ def prepare_digests(run, token, now, started):
     for user in users:
         if time.monotonic() - started > 170:
             break
+        frequency=user['email_frequency']
+        if frequency=='weekly' and run['digest_date'].weekday()!=0:continue
         with database() as conn:
             pending = conn.execute("""SELECT count(*) AS n FROM alert_tasks WHERE run_id=%s AND kind='evaluate'
                 AND payload->>'user_id'=%s AND status='pending'""", (run["id"], str(user["id"]))).fetchone()["n"]
-            existing = conn.execute("SELECT * FROM alert_digests WHERE user_id=%s AND digest_date=%s AND kind='daily'", (user["id"], run["digest_date"])).fetchone()
+            existing = conn.execute("SELECT * FROM alert_digests WHERE user_id=%s AND digest_date=%s AND kind<>'test' AND channel='email'", (user["id"], run["digest_date"])).fetchone()
             holding_rules=conn.execute('SELECT id FROM alert_rules WHERE user_id=%s AND enabled AND NOT archived AND kind=ANY(%s) LIMIT 1',(user['id'],list(HOLDING_TYPES))).fetchone()
         if pending or existing:
             continue
@@ -320,30 +322,32 @@ def prepare_digests(run, token, now, started):
         with database() as conn:
             fence(conn, run["id"], token)
             current = conn.execute("SELECT * FROM alert_users WHERE id=%s FOR UPDATE", (user["id"],)).fetchone()
-            if not current or not current["consent"] or current["suppressed"] or current["email"] != user["email"]:
+            if not current or not current["consent"] or current["suppressed"] or current["email"] != user["email"] or current['email_frequency']!=frequency:
                 continue
-            events = conn.execute("""SELECT e.*,i.metadata FROM alert_events e JOIN alert_rules r ON r.id=e.rule_id
+            period_filter='e.created_at >= %s' if frequency=='weekly' else 'e.session_date >= %s'
+            period_start=run['cutoff']-timedelta(days=7) if frequency=='weekly' else run['digest_date']-timedelta(days=14)
+            events = conn.execute(f"""SELECT e.*,i.metadata FROM alert_events e JOIN alert_rules r ON r.id=e.rule_id
                 JOIN alert_instruments i ON i.id=e.instrument_id
                 WHERE e.user_id=%s AND NOT e.canceled AND r.enabled AND NOT r.archived AND e.meaning_version=r.meaning_version
-                AND e.session_date >= %s::date - 14 AND NOT EXISTS (
-                    SELECT 1 FROM alert_digests d WHERE d.user_id=e.user_id AND d.attempts>0 AND d.status NOT IN ('missed_window','canceled','permanent_failed')
-                    AND d.payload->'eventIds' ? e.id::text) ORDER BY e.session_date,e.id""", (user["id"], run["digest_date"])).fetchall()
+                AND {period_filter} AND NOT EXISTS (
+                    SELECT 1 FROM alert_digests d WHERE d.user_id=e.user_id AND d.channel='email' AND d.attempts>0 AND d.status NOT IN ('missed_window','canceled','permanent_failed')
+                    AND d.payload->'eventIds' ? e.id::text) ORDER BY e.session_date,e.id""", (user["id"], period_start)).fetchall()
             # Limit delayed delivery to five actual market sessions per instrument.
-            events = [e for e in events if len(calendar_from_event(e, run)) <= 5 and not e["correction"]]
+            events = [e for e in events if not e['correction'] and (frequency=='weekly' or len(calendar_from_event(e,run))<=5)]
             events=[e for e in events if e['payload'].get('kind') not in HOLDING_TYPES or e['payload'].get('portfolioFingerprint')==portfolio_hash]
             for event in events:
                 event["payload"] = {**event["payload"], "delayed": event["session_date"] < expected_session(event["metadata"], run["cutoff"])}
             deferred = conn.execute("""SELECT count(*) AS n FROM alert_tasks WHERE run_id=%s AND kind='evaluate'
                 AND payload->>'user_id'=%s AND status='deferred'""", (run["id"], str(user["id"]))).fetchone()["n"]
-            envelope = make_payload(current, run["digest_date"], events, deferred, legacy) if events or legacy else None
+            envelope = make_payload(current, run["digest_date"], events, deferred, legacy,frequency=frequency) if events or legacy else None
             payload = {"email": current["email"], "unsubscribeVersion": current["unsubscribe_version"],
                        "eventIds": [str(e["id"]) for e in events],
                        "rules": {str(e["rule_id"]): e["meaning_version"] for e in events}, "envelope": envelope,
-                       "deferred": deferred}
+                       "deferred": deferred,'frequency':frequency}
             if any(e['payload'].get('kind') in HOLDING_TYPES for e in events):payload['portfolioFingerprint']=portfolio_hash
-            conn.execute("""INSERT INTO alert_digests(id,user_id,digest_date,payload,status) VALUES(%s,%s,%s,%s,%s)
-                ON CONFLICT(user_id,digest_date,kind) DO UPDATE SET payload=EXCLUDED.payload,status=EXCLUDED.status
-                WHERE alert_digests.attempts=0""", (uuid4(), user["id"], run["digest_date"], json_value(payload),
+            conn.execute("""INSERT INTO alert_digests(id,user_id,digest_date,kind,payload,status) VALUES(%s,%s,%s,%s,%s,%s)
+                ON CONFLICT(user_id,digest_date,kind,channel) DO UPDATE SET payload=EXCLUDED.payload,status=EXCLUDED.status
+                WHERE alert_digests.attempts=0""", (uuid4(), user["id"], run["digest_date"],frequency, json_value(payload),
                                                     "pending" if envelope else "deferred" if deferred else "no_signals"))
 
 
@@ -375,6 +379,7 @@ def send_digest(identity, run=None, token=None):
             return
         payload = row["payload"]
         valid = portfolio_valid and user and user["consent"] and not user["suppressed"] and user["email"] == payload["email"] and user["unsubscribe_version"] == payload["unsubscribeVersion"]
+        if row['kind']!='test':valid=valid and user['email_frequency']==payload.get('frequency','daily')
         event_ids=payload.get('eventIds',[])
         live=conn.execute('SELECT count(*) AS n FROM alert_events WHERE id=ANY(%s::uuid[]) AND user_id=%s AND NOT canceled AND correction IS NULL',(event_ids,row['user_id'])).fetchone()['n']
         valid=valid and live==len(event_ids)
@@ -382,7 +387,8 @@ def send_digest(identity, run=None, token=None):
             if not conn.execute("SELECT id FROM alert_rules WHERE id=%s AND user_id=%s AND enabled AND NOT archived AND meaning_version=%s", (rule_id, row["user_id"], version)).fetchone():
                 valid = False
         if not valid:
-            conn.execute("UPDATE alert_digests SET status='canceled' WHERE id=%s", (identity,))
+            conn.execute("""UPDATE alert_digests SET status=CASE WHEN attempts>0 AND status IN ('unknown','sending') THEN 'unknown' ELSE 'canceled' END,
+                error='delivery_settings_changed' WHERE id=%s""", (identity,))
             return
         if row["first_attempt_at"] and utcnow() - row["first_attempt_at"] >= timedelta(hours=24):
             conn.execute("UPDATE alert_digests SET status='unknown',error='idempotency_expired' WHERE id=%s", (identity,))
@@ -526,7 +532,7 @@ def process_alert_run(*, now=None):
         if time.monotonic() - started < 170:
             prepare_digests(run, token, now, started)
         with database() as conn:
-            sends = conn.execute("SELECT id FROM alert_digests WHERE digest_date=%s AND kind='daily' AND status IN ('pending','sending','unknown','retryable_failed') AND next_attempt_at<=now()", (run["digest_date"],)).fetchall()
+            sends = conn.execute("SELECT id FROM alert_digests WHERE digest_date=%s AND channel='email' AND kind IN ('daily','weekly') AND status IN ('pending','sending','unknown','retryable_failed') AND next_attempt_at<=now()", (run["digest_date"],)).fetchall()
         for send in sends:
             if time.monotonic() - started > 180 or utcnow() >= run["deadline"]:
                 break

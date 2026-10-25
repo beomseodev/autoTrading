@@ -2,7 +2,7 @@ import json
 import os
 from hashlib import sha256
 from uuid import UUID, uuid4
-from typing import Any
+from typing import Any,Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
@@ -49,6 +49,7 @@ class Input(BaseModel):
 class SettingsInput(Input):
     revision: int = Field(ge=1)
     consent: bool
+    emailFrequency: Literal['daily','weekly'] | None = None
 
 
 class WatchInput(Input):
@@ -106,7 +107,8 @@ def alerts_page():
 def settings(request: Request):
     u = user(request)
     return {"email": u["email"], "consent": u["consent"], "revision": u["revision"],
-            "suppressed": u["suppressed"], "sendTime": "한국시간 오전 8시대 · 새 신호가 있는 날만",
+            "emailFrequency":u['email_frequency'],
+            "suppressed": u["suppressed"], "sendTime": "한국시간 오전 8시대 · "+('월요일 주간 요약' if u['email_frequency']=='weekly' else '새 신호가 있는 날만'),
             "sendingEnabled": os.getenv("STOCK_ALERTS_SEND_ENABLED") == "true",
             "calendarConfigured": bool(os.getenv('BENZINGA_API_KEY') and os.getenv('BENZINGA_REQUESTS_PER_MINUTE')),
             "filingsConfigured": {'sec':bool(os.getenv('SEC_USER_AGENT')),'dart':bool(os.getenv('DART_API_KEY'))},
@@ -122,9 +124,10 @@ def set_settings(payload: SettingsInput, request: Request):
         if payload.consent and current["suppressed"] not in (None, "deleted"):
             raise HTTPException(409, "반송·스팸신고로 발송이 중지되었습니다. 운영자에게 문의해주세요.")
         conn.execute("""UPDATE alert_users SET consent=%s, consent_at=CASE WHEN %s THEN now() ELSE consent_at END,
-            revision=revision+1, unsubscribe_version=unsubscribe_version+1,
-            suppressed=CASE WHEN suppressed='deleted' THEN NULL ELSE suppressed END WHERE id=%s""",
-                     (payload.consent, payload.consent, u["id"]))
+            revision=revision+1, unsubscribe_version=unsubscribe_version+%s,
+            suppressed=CASE WHEN suppressed='deleted' THEN NULL ELSE suppressed END,
+            email_frequency=coalesce(%s,email_frequency) WHERE id=%s""",
+                     (payload.consent, payload.consent,int(payload.emailFrequency is None or payload.consent!=current['consent']),payload.emailFrequency, u["id"]))
         if payload.consent and os.getenv("STOCK_ALERTS_SEND_ENABLED") == "true":
             from app.auth import is_owner
             if is_owner(request.session["user"]):

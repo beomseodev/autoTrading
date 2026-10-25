@@ -41,10 +41,11 @@ def unsubscribe(token, *, apply=False):
             raise HTTPException(400, "만료된 수신 해지 링크입니다.")
 
 
-def make_payload(user, day, events, deferred=0, legacy=None, test=False):
+def make_payload(user, day, events, deferred=0, legacy=None, test=False,frequency='daily'):
     base = os.environ["APP_BASE_URL"].rstrip("/")
     link = base + "/notifications/unsubscribe/" + unsubscribe_token(user)
     lines = ["종가 기준 관심종목 알림", "한국시간 발송일: " + str(day), ""]
+    if frequency=='weekly':lines.extend(['주간 요약 · 최근 7일 동안 확인한 새 신호 · 보류 수는 이번 점검 기준',''])
     for event in events:
         payload = event["payload"]
         if payload.get('information'):
@@ -82,7 +83,7 @@ def make_payload(user, day, events, deferred=0, legacy=None, test=False):
                   "해지 전에 이미 접수된 메일은 한 통 도착할 수 있습니다."])
     text = "\n".join(lines)
     return {"from": os.environ["ALERT_EMAIL_FROM"], "to": [user["email"]],
-            "subject": ("[종가 알림] 메일 연결 테스트" if test else f"[종가 알림] {day} · {len({e['payload']['symbol'] for e in events})}종목 {len(events)}신호"),
+            "subject": ("[종가 알림] 메일 연결 테스트" if test else f"[{'주간 요약' if frequency=='weekly' else '종가 알림'}] {day} · {len({e['payload']['symbol'] for e in events})}종목 {len(events)}신호"),
             "text": text, "html": "<div style='white-space:pre-wrap'>" + escape(text) + "</div>",
             "headers": {"List-Unsubscribe": "<" + link + ">", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"}}
 

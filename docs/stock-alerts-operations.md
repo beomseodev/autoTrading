@@ -20,6 +20,7 @@
 
 1. PostgreSQL DB와 `.env.example`의 `ALERT_DATABASE_URL`을 설정한다. 운영은 TLS pooled URL, 마이그레이션은 TLS direct URL을 사용한다.
 2. 저장소 루트에서 `.venv/Scripts/python -m scripts.migrate_alerts`를 실행한다. `ALERT_MIGRATION_DATABASE_URL`이 필요하다. 번호별 SQL 체크섬을 검사하며 앱 시작 시 자동 적용하지 않는다.
+   기존 운영 환경에 011 이후 채널 마이그레이션을 적용할 때는 Cron을 중지하고 진행 중 요청이 끝난 후 마이그레이션 → 새 코드 배포 → 확인 → Cron 재개 순서를 따른다. 구버전 발송 SQL은 새 고유 제약과 호환되지 않으므로 신·구 버전을 동시에 발송시키지 않는다. 이번 개발에서는 운영 발송을 활성화하지 않는다.
 3. Twelve Data의 한국·미국 주식·ETF 및 외부 이메일 알림 이용 계약과 개별 종목 커버리지를 확인한다. API 키와 실제 분당 credit 한도를 설정한다. 한 종목 일봉 및 분할 조회는 합계 21 credits이므로 최소 그 이상의 분당 quota가 필요하다. 검색도 credits를 사용한다.
 
    21 credits는 단일 조회의 최소 조건이며 100종목을 08시대에 두 번 확인할 처리량 보장이 아니다. 대상 수·5분 재개 간격·확인 대기를 포함해 계약 quota와 실제 응답 지연으로 별도 shadow 검증한다. 아래 부하 검사는 공급자 네트워크와 실제 credit 소모를 가짜 응답으로 대체한다.
@@ -99,3 +100,8 @@ Chrome 검사는 Windows의 기본 Chrome 실행 경로를 사용한다. 화면 
 공식 계약: [SEC API](https://www.sec.gov/search-filings/edgar-application-programming-interfaces), [SEC 접근 규칙](https://www.sec.gov/search-filings/edgar-search-assistance/accessing-edgar-data), [DART 공시검색](https://opendart.fss.or.kr/guide/detail.do?apiGrpCd=DS001&apiId=2019001), [DART 고유번호](https://opendart.fss.or.kr/guide/detail.do?apiGrpCd=DS001&apiId=2019018). 인증키를 이용한 실제 호출·운영 발송은 개발 검증에서 제외한다.
 
 최초 기준 날짜는 SEC는 미국 동부시간, DART는 한국시간으로 계산한다. 한국의 다음 날짜 아침 이후 미국의 같은 접수일에 추가된 공시도 처음 확인할 때 알린다. DART 회사 목록의 XML 오류도 인증 오류·요청 제한·시스템 점검을 구분하며 점검/일시 오류는 같은 실행일에 재시도한다.
+# 일간·주간 수신 주기
+
+이메일은 기존 계정과 기존 API 요청 모두 일간이 기본이다. 주간을 선택해도 조건은 매일 평가하며, 한국시간 월요일 오전 8시대에 최근 7일 동안 확인한 유효한 신호를 모아 보낸다. 주간 메일의 보류 개수는 이번 점검 기준이다. 조건을 중지·수정하거나 데이터 정정이 확인되면 대기 중인 해당 신호는 제외된다.
+
+같은 채널에서 이미 접수되었거나 접수 여부가 불확실한 신호는 수신 주기를 바꿔도 재발송하지 않는다. 하루에 한 묶음만 준비한다. 당일 묶음이 준비된 뒤 주기를 변경하면 미발송 묶음이 취소될 수 있으며, 새 주기는 다음 예정일부터 적용된다. 이메일 테스트는 별도로 하루 한 번이다. 주간 요약에는 기존 리밸런싱 점검도 동일 주기로 포함된다. 동의를 유지한 주기 설정은 기존 메일의 해지 링크를 보존한다. 동의 변경·재구독과 기존 동의 전용 API의 재동의 요청은 이전 링크를 무효화한다.

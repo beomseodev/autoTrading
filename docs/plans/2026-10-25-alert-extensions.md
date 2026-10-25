@@ -12,8 +12,8 @@
 | 5 | 저장 보유자산 기반 평단·비중 | 완료, 네 역할 재검토 통과 |
 | 6 | 실적·배당 일정·변경 | 완료, 네 역할 검토·수정 후 팀장 승인 |
 | 7 | 한국·미국 공시 | 완료, 네 역할 검토·수정 후 팀장 승인 |
-| 8 | 채널별 일간·주간 | 진행 중 |
-| 9 | 웹 푸시 | 대기 |
+| 8 | 채널별 일간·주간 | 완료, 네 역할 재검토 통과 (푸시 채널은 기능9에서 연결) |
+| 9 | 웹 푸시 | 진행 중 |
 | 최종 | 전체 회귀·부하·실사용자 흐름 리뷰 | 대기 |
 
 현재 명세 근거는 2026-10-23-stock-alerts.md와 최신 구현·복구 검토 문서다. 기존 10종 수식, API 생명주기, 거래소 달력, 계정 분리, 저장 복구는 기존 구현·테스트를 재사용한다. 기본 검사: Python 251 통과/21 건너뜀, Node 38 통과. 건너뛴 DB·부하 검사는 격리 PostgreSQL에서 수행한다.
@@ -65,3 +65,9 @@ All four Orca roles independently reviewed. Scale cleared required code changes 
 SEC CIK and DART corporate-code mappings are shared, filings retain account-specific baseline/state/events, first successful collection and resume establish a baseline without historical delivery, and same-source-date filings discovered after that baseline remain eligible. DART maintenance and server errors retry within the same run. XML declarations, invalid paths/identifiers and malformed mapping data are rejected. JSON syntax failures intentionally remain retryable lookup failures, never normal no-filings results; the stricter malformed-response statement applies to XML. No existing deployed filing state needed migration because this feature is not deployed.
 
 Before review fixes: full Python 355 passed / one load test skipped, Node 42 passed, Chrome passed. Source-date and XML failures were reproduced before fixes. Final filings/jobs tests: 34 passed, including shared fetch/account isolation, two-page atomic cache completion, maintenance recovery, source-date boundary and malformed XML/encoding. Provider quota throughput remains part of final mixed-load testing. Actual SEC/DART credentials and delivery were not exercised.
+
+## Feature 8 verification
+
+All four Orca roles independently reviewed and followed up, clearing required changes; no roles were missing or providers substituted. All feature workers were released and deliveries acknowledged. Reports: `.team-review/extensions-f8-*-followup.md`. Adopted findings: weekly candidates must use discovery time without the daily session-age cap; frequency-only settings preserve received-email unsubscribe links while consent changes and legacy reconfirmations rotate them; document a stopped-Cron schema/code transition. Added failures before fixes, including same-day legacy duplication, ambiguous prior delivery, discovery-window boundaries and legacy API compatibility.
+
+Latest full Python: 372 passed / one opt-in load skipped; related cadence/jobs/API: 28 passed. Node 42 and all three Chrome flows passed. Separately ran the existing PostgreSQL acceptance load: 50 users, 100 instruments, 5,000 rules, exactly 100 fetches and 50 digests, two resumed calls of 159.48 and 60.66 seconds (222.05 seconds including setup). This uses fixed market data and immediate fake mail responses; weekly accumulation, mature ledger, provider delay and mixed-source quota testing remain in final verification. Web Push connects its own channel to cadence in feature 9.

@@ -30,12 +30,12 @@ const server = http.createServer((req,res)=>{
     const fixture=JSON.parse(fs.readFileSync('tests/fixtures/stock-alert-api.json','utf8'));
     await send('Page.addScriptToEvaluateOnNewDocument',{source:`
       window.fixture=${JSON.stringify(fixture)};window.calls=[];window.watch=[];window.rules=[];window.rejectSave=false;window.rejectSymbol=null;window.loseSymbol=null;window.watchSequence=0;
-      window.holdings=[{ticker:'SCHD'},{ticker:'AAPL'},{ticker:'QQQ'},{ticker:'TQQQ'}];window.events=[];
+      window.holdings=[{ticker:'SCHD'},{ticker:'AAPL'},{ticker:'QQQ'},{ticker:'TQQQ'}];window.events=[];window.preferences={emailFrequency:'daily',consent:false};
       window.fetch=async(url,opts={})=>{calls.push({url,...opts});await new Promise(r=>setTimeout(r,150));let data={items:[],nextCursor:null};const method=opts.method||'GET';const body=opts.body?JSON.parse(opts.body):{};
       if(url==='/auth/session')data={user:{sub:'test-user',email:'test@example.com'},isOwner:true};
       else if(url==='/api/alerts/events')data={items:events,nextCursor:null};
       else if(url==='/api/alerts/operations')data={runs:[{digest_date:'2026-10-23',tasks:[{kind:'fetch',status:'deferred',count:2}],deliveries:[{status:'unknown',count:1}],duration_seconds:12.5,rate_limit_count:3,oldestPending:null}]};
-      else if(url==='/api/alerts/settings')data={...fixture,revision:1,email:'test@example.com',consent:false,sendingEnabled:false};
+      else if(url==='/api/alerts/settings'){if(method==='PATCH')Object.assign(preferences,body);data={...fixture,revision:1,email:'test@example.com',sendingEnabled:false,...preferences};}
       else if(url.startsWith('/api/alerts/instrument?'))data={symbol:new URL(url,'http://test').searchParams.get('symbol').trim().toUpperCase(),name:'<img src=x onerror=alert(1)>',mic:'ARCX',currency:'USD'};
       else if(url==='/api/dashboard/state')data={state:{portfolio:{positions:holdings}}};
       else if(url==='/api/alerts/watchlist'){if(method==='POST'){if(rejectSave||body.symbol===rejectSymbol)return {ok:false,json:async()=>({detail:'종목 조회 실패. 입력은 유지됩니다.'})};const symbol=/[.]K[QS]$/.test(body.symbol)?body.symbol:body.symbol.replaceAll('.','-');if(watch.some(w=>w.symbol===symbol))return {ok:false,status:409,json:async()=>({detail:'이미 등록된 관심종목입니다.'})};watchSequence++;watch.push({id:'watch-'+watchSequence,instrumentId:'instrument-'+watchSequence,symbol,metadata:{name:'<img src=x onerror=alert(1)>',mic:'ARCX',currency:'USD'},ruleCount:0,dataStatuses:[]});if(body.symbol===loseSymbol){loseSymbol=null;throw new TypeError('Failed to fetch');}}data={items:watch,...watch.at(-1)};}
@@ -49,6 +49,10 @@ const server = http.createServer((req,res)=>{
     assert(await run("document.getElementById('refresh').disabled"));
     await until("!document.getElementById('content').hidden && document.getElementById('loading').hidden");
     assert.equal(await run("document.getElementById('kind').options.length"),fixture.types.length);
+    await run("document.getElementById('email-frequency').value='weekly';document.getElementById('settings-form').requestSubmit()");
+    await until("document.getElementById('loading').hidden");
+    assert.equal(await run("preferences.emailFrequency"),'weekly');
+    assert(await run("document.getElementById('frequency-note').textContent.includes('매주 월요일')"));
     assert(await run("document.getElementById('rule-meaning').textContent.includes('200거래일')"));
     assert(await run("!document.getElementById('operations-panel').hidden && document.getElementById('operations').textContent.includes('자료 조회 보류: 2건') && document.getElementById('operations').textContent.includes('결과 확인 필요: 1건')"));
     await run("document.getElementById('symbol').value='SCHD'; document.getElementById('watch-form').requestSubmit()");
