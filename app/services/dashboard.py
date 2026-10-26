@@ -5,6 +5,7 @@ import io
 import logging
 import math
 from concurrent.futures import ThreadPoolExecutor
+from copy import copy
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from time import time
@@ -37,7 +38,7 @@ def finite_number(value, *, positive=False):
 @lru_cache(maxsize=256)
 def quote(symbol: str, bucket: int) -> dict:
     ticker = yf.Ticker(symbol)
-    frame = ticker.history(period="5d", auto_adjust=False, raise_errors=True, timeout=12)
+    frame = ticker.history(period="1mo", auto_adjust=False, raise_errors=True, timeout=12)
     close = frame["Close"].dropna()
     if len(close) < 2:
         raise ValueError("최근 두 거래일의 시세가 없습니다.")
@@ -90,7 +91,7 @@ def macro_observation(series: str, bucket: int) -> dict:
 
 class DashboardService:
     def get_quote(self, symbol: str) -> dict:
-        return quote(symbol, int(time() // 300)).copy()
+        return quote(symbol, getattr(self, "_quote_bucket", int(time() // 300))).copy()
 
     def get_macro(self, series: str) -> dict:
         return macro_observation(series, int(time() // 1800)).copy()
@@ -121,9 +122,12 @@ class DashboardService:
         return {"markets": markets, "macro": macros}
 
     def portfolio_snapshot(self, request: PortfolioSnapshotRequest) -> dict:
+        # Freeze the cache bucket per request without sharing mutable state across requests.
+        provider = copy(self)
+        provider._quote_bucket = int(time() // 300)
         fx = None
         try:
-            fx = self.get_quote("KRW=X")
+            fx = provider.get_quote("KRW=X")
         except Exception:
             pass
         def convert(value, currency, *, previous=False):
@@ -137,7 +141,7 @@ class DashboardService:
         def holding(position):
             item = position.model_dump()
             try:
-                price = self.get_quote(position.ticker)
+                price = provider.get_quote(position.ticker)
                 currency = "KRW" if position.ticker.endswith((".KS", ".KQ")) else "USD"
                 if price.get("currency") != currency:
                     raise ValueError("종목의 거래 통화를 확인할 수 없습니다.")

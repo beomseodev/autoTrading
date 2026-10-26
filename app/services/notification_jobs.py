@@ -61,7 +61,8 @@ def run_notification(*, test=False):
             if item["needsRebalance"]:
                 lines.append(f"{item.get('name', item['ticker'])} ({item['ticker']}): 현재 {item['weightPct']:.2f}% / 목표 {item['targetWeightPct']:.2f}% (차이 {item['driftPct']:+.2f}%p)")
         body = "\n".join([*lines, "", "수동 입력한 수량 기준입니다. 거래 후 보유 정보를 수정해주세요.",
-                           "일봉 기준 점검이며 자동 주문은 실행하지 않습니다.", os.environ["APP_BASE_URL"]])
+                           "시장별 최신 조회 가격 기준 점검이며 장중 가격이 포함될 수 있습니다. 자동 주문은 실행하지 않습니다.",
+                           "종목별 시세와 환율 기준일은 대시보드에서 확인해주세요.", os.environ["APP_BASE_URL"]])
     try:
         store.write(claim_name, {"attemptedAt": now.isoformat()}, create=True)
     except HTTPException as exc:

@@ -1,6 +1,43 @@
 from datetime import date, datetime, timezone
 
+import pandas as pd
+
 from app.dashboard_schemas import PortfolioSnapshotRequest
+from app.services import alert_data
+
+
+def quote_date_problem(snapshot: dict, fx_needed: bool, now: datetime) -> str | None:
+    sessions = {}
+    for item in snapshot["holdings"]:
+        name = "XKRX" if item["ticker"].endswith((".KS", ".KQ")) else "XNYS"
+        try:
+            if name not in sessions:
+                expected = alert_data.expected_session({"calendar": name}, now)
+                schedule = alert_data.calendar(name, now.year).schedule
+                opened = schedule[schedule["open"] <= pd.Timestamp(now)]
+                sessions[name] = expected, set(opened.loc[str(expected):].index.date)
+        except Exception:
+            return f"{item['ticker']} 거래일을 확인할 수 없어 점검을 보류했습니다. 잠시 후 다시 조회해주세요."
+        expected, allowed = sessions[name]
+        try:
+            observed = date.fromisoformat(item.get("asOf"))
+        except (ValueError, TypeError):
+            observed = None
+        if observed not in allowed:
+            return (f"{item['ticker']} 시세 기준일 {item.get('asOf') or '미확인'}: "
+                    f"오래되었거나 유효하지 않아 점검을 보류했습니다. 필요 기준일: {expected} 확정 시세 "
+                    "또는 이후 개장한 거래일의 가격. 5분 후 새로고침해주세요.")
+    if fx_needed:
+        raw = (snapshot.get("fx") or {}).get("asOf")
+        expected = alert_data.expected_fx_day(now)
+        try:
+            observed = date.fromisoformat(raw)
+        except (ValueError, TypeError):
+            observed = None
+        if observed is None or not expected <= observed <= now.date() or observed.weekday() > 4:
+            return (f"환율 기준일 {raw or '미확인'}: 오래되었거나 유효하지 않아 점검을 보류했습니다. "
+                    f"필요 기준일: {expected} 이후 현재까지의 영업일. 5분 후 새로고침해주세요.")
+    return None
 
 
 def evaluate_rebalance(request: PortfolioSnapshotRequest, snapshot: dict, today: date | None = None) -> dict:
@@ -12,20 +49,13 @@ def evaluate_rebalance(request: PortfolioSnapshotRequest, snapshot: dict, today:
         return result
     if not snapshot["complete"] or not snapshot["totalValue"]:
         return {**result, "status": "unavailable", "message": "평가금액이나 시세가 부족해 점검을 보류했습니다."}
-    dates = {item["asOf"] for item in snapshot["holdings"]}
-    parsed = [date.fromisoformat(value) for value in dates]
-    today = today or datetime.now(timezone.utc).date()
-    per_currency = {}
-    for item in snapshot["holdings"]:
-        per_currency.setdefault(item.get("currency", "USD"), set()).add(item["asOf"])
+    now = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc) if today else datetime.now(timezone.utc)
     fx_needed = (request.cashKRW > 0 and request.baseCurrency == "USD") or (request.cashUSD > 0 and request.baseCurrency == "KRW") or any(
         item.get("currency", "USD") != request.baseCurrency for item in snapshot["holdings"])
-    fx = snapshot.get("fx")
-    stale_fx = fx_needed and (not fx or not 0 <= (today - date.fromisoformat(fx["asOf"])).days <= 4 or
-                             abs((date.fromisoformat(fx["asOf"]) - max(parsed)).days) > 1)
-    if any(len(group) > 1 for group in per_currency.values()) or (max(parsed) - min(parsed)).days > 1 or any(
-            not 0 <= (today - observed).days <= 4 for observed in parsed) or stale_fx:
-        return {**result, "status": "stale", "message": "종목별 시세 날짜가 다르거나 오래되어 점검을 보류했습니다."}
+    problem = quote_date_problem(snapshot, fx_needed, now)
+    if problem:
+        return {**result, "status": "stale", "message": problem}
+    dates = {item["asOf"] for item in snapshot["holdings"]}
     total = snapshot["totalValue"]
     targets = {p.ticker: p.targetWeight for p in request.positions if p.ticker not in members}
     names = {item["ticker"]: item.get("name") or item["ticker"] for item in snapshot["holdings"]}

@@ -2,6 +2,19 @@ const assert = require('node:assert/strict');
 const {test} = require('node:test');
 const {browser, saved} = require('./helpers/dashboard.cjs');
 
+test('rebalance shows all quote dates and preserves the specific deferral reason', () => {
+  const page = browser(null);
+  page.run(`setMetric = () => {}; renderAllocation = () => {};
+    const data = {holdings:[], complete:true, hasAssets:true, baseCurrency:'USD',
+      totalValue:100, cashValue:100, dayChange:null, fetchedAt:'2026-10-26T03:00:00Z',
+      rebalance:{message:'점검 완료', asOf:'2026-10-26', quoteDates:['2026-10-23','2026-10-26'], thresholdPct:5, items:[]}};
+    renderPortfolio(data)`);
+  assert.match(page.run('$("#rebalance-status").textContent'), /2026-10-23 \/ 2026-10-26/);
+  page.run(`renderPortfolio({...data, rebalance:{message:'AAPL 시세 기준일 2026-10-22: 필요 기준일 2026-10-23. 5분 후 새로고침해주세요.', items:[]}})`);
+  assert.match(page.run('$("#rebalance-status").textContent'), /AAPL.*2026-10-22.*2026-10-23/);
+  assert.match(page.run('$("#rebalance-status").textContent'), /5분 후 새로고침/);
+});
+
 test('rebalance settings remain visible without quotes and distinguish incomplete targets', () => {
   const page = browser(null);
   page.run(`state.portfolio.positions=[{ticker:'005930.KS',targetWeight:60},{ticker:'AAPL',targetWeight:0}];

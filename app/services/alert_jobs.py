@@ -306,7 +306,11 @@ def legacy_section(user):
         return "리밸런싱 자료 보류: " + check["message"]
     if check["status"] == "balanced":
         return None
-    return "\n".join(f"{x.get('name', x['ticker'])}: 현재 {x['weightPct']:.2f}% / 목표 {x['targetWeightPct']:.2f}%" for x in check["items"] if x["needsRebalance"])
+    lines = [f"시세 기준일: {' / '.join(check['quoteDates'])}",
+             "시장별 최신 조회 가격 기준 점검이며 장중 가격이 포함될 수 있습니다.",
+             "종목별 시세와 환율 기준일은 대시보드에서 확인해주세요."]
+    lines.extend(f"{x.get('name', x['ticker'])}: 현재 {x['weightPct']:.2f}% / 목표 {x['targetWeightPct']:.2f}%" for x in check["items"] if x["needsRebalance"])
+    return "\n".join(lines)
 
 
 def prepare_digests(run, token, now, started):

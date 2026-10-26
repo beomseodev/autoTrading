@@ -1,5 +1,5 @@
 from copy import deepcopy
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -10,6 +10,18 @@ from app.main import app
 from app.services.rebalance_alerts import evaluate_rebalance
 from app.services import notification_jobs as jobs
 from conftest import session_cookie
+
+
+NOW = datetime(2026, 10, 20, 16, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def fixed_rebalance_clock(monkeypatch):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW.astimezone(tz or timezone.utc)
+    monkeypatch.setattr('app.services.rebalance_alerts.datetime', Clock)
 
 
 def test_accounts_cannot_read_or_overwrite_each_others_state(memory_store):
@@ -56,7 +68,7 @@ def portfolio(**updates):
 
 
 def snapshot(**updates):
-    observed = datetime.now(timezone.utc).date().isoformat()
+    observed = NOW.date().isoformat()
     return {"complete": True, "totalValue": 100, "cashValue": 0, "fx": None,
             "holdings": [{"ticker": "AAA", "value": 80, "asOf": observed, "currency": "USD"},
                          {"ticker": "BBB", "value": 20, "asOf": observed, "currency": "USD"}]} | updates
@@ -149,6 +161,26 @@ def test_email_preserves_stock_names_and_codes(memory_store, monkeypatch):
     monkeypatch.setattr(jobs, 'send_email', lambda subject, body: sent.append(body))
     assert jobs.run_notification()['outcome'] == 'sent'
     assert '애플 (AAA)' in sent[0]
+    assert '종목별 시세와 환율 기준일은 대시보드에서 확인' in sent[0]
+
+
+def test_consolidated_rebalance_email_explains_mixed_price_basis(memory_store, monkeypatch):
+    from app.services.alert_jobs import legacy_section
+    from app.services.alert_email import make_payload
+    store, _ = memory_store
+    store.write('dashboard.json', SavedDashboard(portfolio=portfolio()).model_dump(mode='json'))
+    monkeypatch.setattr('app.services.portfolio_store.storage_ready', lambda: True)
+    monkeypatch.setattr('app.services.portfolio_store.PortfolioStore', type(store))
+    monkeypatch.setenv('ALERT_UNSUBSCRIBE_SECRET', 'test-unsubscribe-secret-more-than-32-chars')
+    monkeypatch.setenv('ALERT_EMAIL_FROM', 'alerts@example.com')
+    check = {'ready': True, 'status': 'rebalance_needed', 'quoteDates': ['2026-10-23', '2026-10-26'],
+             'items': [{'ticker': 'AAA', 'weightPct': 80, 'targetWeightPct': 50, 'needsRebalance': True}]}
+    monkeypatch.setattr(jobs.DashboardService, 'portfolio_snapshot', lambda self, request: {'rebalance': check})
+    user = {'id': 'test', 'email': 'owner@gmail.com', 'unsubscribe_version': 1}
+    payload = make_payload(user, NOW.date(), [], legacy=legacy_section(user))
+    assert '2026-10-23 / 2026-10-26' in payload['text']
+    assert '장중 가격이 포함될 수 있습니다' in payload['text']
+    assert '종목별 시세와 환율 기준일은 대시보드에서 확인' in payload['text']
 
 
 def test_group_email_uses_combined_target_and_sends_once(memory_store, monkeypatch):
@@ -181,11 +213,11 @@ def test_incomplete_or_zero_valuation_never_alerts(value):
     assert not evaluate_rebalance(portfolio(), value)["ready"]
 
 
-def test_old_or_mismatched_prices_defer():
+def test_prices_older_than_latest_confirmed_session_defer():
     value = snapshot()
-    value["holdings"][0]["asOf"] = (date.today() - timedelta(days=8)).isoformat()
+    value["holdings"][0]["asOf"] = (NOW.date() - timedelta(days=8)).isoformat()
     assert evaluate_rebalance(portfolio(), value)["status"] == "stale"
-    value["holdings"][0]["asOf"] = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+    value["holdings"][0]["asOf"] = (NOW.date() - timedelta(days=4)).isoformat()
     assert evaluate_rebalance(portfolio(), value)["status"] == "stale"
 
 
@@ -194,12 +226,13 @@ def test_single_currency_needs_no_fx_but_cross_currency_does():
     assert not evaluate_rebalance(portfolio(cashKRW=100), snapshot())["ready"]
 
 
-def test_mixed_markets_accept_only_recent_adjacent_sessions():
+def test_mixed_markets_accept_latest_sessions():
     request = portfolio(positions=[{"ticker": "AAA", "quantity": 1, "averageCost": 10, "targetWeight": 50},
                                    {"ticker": "005930.KS", "quantity": 1, "averageCost": 10, "targetWeight": 50}])
     value = snapshot()
-    value["fx"] = {"asOf": datetime.now(timezone.utc).date().isoformat()}
-    value["holdings"][1].update(ticker="005930.KS", currency="KRW", asOf=(datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat())
+    value["fx"] = {"asOf": NOW.date().isoformat()}
+    value["holdings"][0]['asOf'] = (NOW.date() - timedelta(days=1)).isoformat()
+    value["holdings"][1].update(ticker="005930.KS", currency="KRW", asOf=NOW.date().isoformat())
     assert evaluate_rebalance(request, value)["ready"]
 
 

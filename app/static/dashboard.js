@@ -717,7 +717,7 @@ function renderPortfolio(data) {
   $("#updated-at").textContent = `화면 조회 ${new Date(data.fetchedAt).toLocaleTimeString("ko-KR", {timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit"})} (한국시간)`;
   renderAllocation(data);
   const check = data.rebalance;
-  $("#rebalance-status").textContent = check ? `${check.message}${check.asOf ? ` 시세 기준 ${check.asOf} · 허용폭 ±${number(check.thresholdPct)}%p` : ""}` : "목표 비중을 입력해주세요.";
+  $("#rebalance-status").textContent = check ? `${check.message}${check.asOf ? ` 시세 기준 ${(check.quoteDates ?? [check.asOf]).join(" / ")} · 허용폭 ±${number(check.thresholdPct)}%p` : ""}` : "목표 비중을 입력해주세요.";
   $("#rebalance-body").innerHTML = (check?.items ?? []).map(item => `<tr><td><strong>${esc(item.name || item.ticker)}</strong>${item.name && item.name !== item.ticker ? `<small>${esc(item.ticker)}</small>` : ""}${item.needsRebalance ? " · 점검 필요" : ""}</td><td class="number" data-label="현재 비중">${number(item.weightPct)}%</td><td class="number" data-label="목표 비중">${number(item.targetWeightPct)}%</td><td class="number" data-label="차이 (%p)">${pct(item.driftPct).replace("%", "%p")}</td><td class="number">${money(item.adjustmentValue)}</td></tr>`).join("");
 }
 async function loadPortfolio() {
