@@ -48,7 +48,7 @@ const server = http.createServer((req,res)=>{
       else if(url==='/api/dashboard/state')data={state:{portfolio:{positions:holdings}}};
       else if(url==='/api/alerts/watchlist'){if(method==='POST'){if(rejectSave||body.symbol===rejectSymbol)return {ok:false,json:async()=>({detail:'종목 조회 실패. 입력은 유지됩니다.'})};const symbol=/[.]K[QS]$/.test(body.symbol)?body.symbol:body.symbol.replaceAll('.','-');if(watch.some(w=>w.symbol===symbol))return {ok:false,status:409,json:async()=>({detail:'이미 등록된 관심종목입니다.'})};watchSequence++;watch.push({id:'watch-'+watchSequence,instrumentId:'instrument-'+watchSequence,symbol,metadata:{name:'<img src=x onerror=alert(1)>',mic:'ARCX',currency:'USD'},ruleCount:0,dataStatuses:[]});if(body.symbol===loseSymbol){loseSymbol=null;throw new TypeError('Failed to fetch');}}data={items:watch,...watch.at(-1)};}
       else if(url.startsWith('/api/alerts/watchlist/')&&method==='DELETE')watch=watch.filter(w=>w.id!==url.split('/').at(-1));
-      else if(url==='/api/alerts/rules'){if(method==='POST')rules.push({id:'rule-1',symbol:'SCHD',kind:body.type,params:body.params,name:body.name,revision:1,enabled:true});data={items:rules,ids:['rule-1']};}
+      else if(url==='/api/alerts/rules'){if(method==='POST'){if(window.rejectRule)return {ok:false,status:422,json:async()=>({detail:'규칙 저장 실패'})};rules.push({id:'rule-1',symbol:'SCHD',kind:body.type,params:body.params,name:body.name,revision:1,enabled:true});}data={items:rules,ids:['rule-1']};}
       else if(url==='/api/alerts/rules/rule-1'){if(method==='PATCH')Object.assign(rules[0],body,{revision:rules[0].revision+1});if(method==='DELETE')rules=[];}
       return {ok:true,status:200,json:async()=>structuredClone(data)};};`});
     await send('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
@@ -95,6 +95,8 @@ const server = http.createServer((req,res)=>{
     assert(await run("document.getElementById('frequency-note').textContent.includes('매주 월요일')"));
     assert(await run("document.getElementById('rule-meaning').textContent.includes('200거래일')"));
     assert(await run("!document.getElementById('operations-panel').hidden && document.getElementById('operations').textContent.includes('자료 조회 보류: 2건') && document.getElementById('operations').textContent.includes('결과 확인 필요: 1건')"));
+    await run("document.getElementById('next-condition').click()");
+    assert(await run("document.getElementById('status').textContent.includes('먼저 관심종목을 검색')"));
     await run("document.getElementById('symbol').value='SCHD'; document.getElementById('watch-form').requestSubmit()");
     await until("document.getElementById('loading').hidden");
     assert.equal(await run("watch.length"),0,'Review the instrument before saving');
@@ -102,11 +104,18 @@ const server = http.createServer((req,res)=>{
     assert.equal(await run("document.querySelectorAll('#watch-preview img').length"),0);
     await run("document.getElementById('confirm-watch').click()");
     await until("document.querySelector('#watchlist input') && document.getElementById('loading').hidden");
+    assert(await run("document.querySelector('#watchlist input').checked"), 'Added instrument must be selected');
+    await run("document.querySelector('#watchlist input').click();document.getElementById('next-condition').click()");
+    assert(await run("document.getElementById('status').textContent.includes('체크박스를 선택')"));
+    await run("document.querySelector('#watchlist input').click()");
     assert.equal(await run("document.querySelectorAll('#watchlist img').length"),0,'Names must render as text');
     assert(await run("document.getElementById('watchlist').textContent.includes('규칙 0개')"));
     await run("watch[0].ruleCount=1;watch[0].dataStatuses=['insufficient_data'];document.getElementById('refresh').click()");
     await until("document.getElementById('loading').hidden");
     assert(await run("document.getElementById('watchlist').textContent.includes('계산 자료 부족')"));
+    await run("document.getElementById('next-condition').click();document.getElementById('rule-name').value='??';document.getElementById('back-watch').click();document.getElementById('next-condition').click()");
+    assert.equal(await run("document.getElementById('rule-name').value"),'??');
+    await run("document.getElementById('rule-name').value='';window.submitRule=()=>{if(!document.getElementById('step-watch').hidden)document.getElementById('next-condition').click();document.getElementById('rule-form').requestSubmit();if(!document.getElementById('step-confirm').hidden)document.getElementById('confirm-rule').click();}");
     await run("document.getElementById('kind').value='all_of';document.getElementById('kind').dispatchEvent(new Event('change'))");
     assert.equal(await run("document.querySelectorAll('#params fieldset').length"),2);
     assert(await run("document.getElementById('rule-meaning').textContent.includes('그리고')"));
@@ -114,19 +123,24 @@ const server = http.createServer((req,res)=>{
     assert(await run('document.documentElement.scrollWidth<=window.innerWidth'),'AND editor mobile overflow');
     await send('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
     await run("document.getElementById('rule-form').requestSubmit()");
+    assert(await run("!document.getElementById('step-confirm').hidden && document.getElementById('confirm-summary').textContent.includes('SCHD') && document.getElementById('confirm-condition').textContent.includes('그리고')"));
+    await run("document.getElementById('back-rule').click();document.getElementById('rule-form').requestSubmit();window.rejectRule=true;document.getElementById('confirm-rule').click()");
+    await until("document.getElementById('status').textContent.includes('규칙 저장 실패') && document.getElementById('loading').hidden");
+    assert(await run("!document.getElementById('step-confirm').hidden && rules.length===0"));
+    await run("window.rejectRule=false;document.getElementById('confirm-rule').click()");
     await until("rules.length===1 && document.getElementById('loading').hidden");
     assert.equal(await run("rules[0].params.conditions.length"),2);
     assert(await run("document.getElementById('rules').textContent.includes('운영 중지 · 활성화 후 다음 점검부터 평가합니다')"));
     await run("document.querySelectorAll('#rules button')[2].click()");
     await until("rules.length===0 && document.getElementById('loading').hidden");
-    await run("document.getElementById('kind').value='retest';document.getElementById('kind').dispatchEvent(new Event('change'));document.getElementById('rule-form').requestSubmit()");
+    await run("document.getElementById('kind').value='retest';document.getElementById('kind').dispatchEvent(new Event('change'));window.submitRule()");
     await until("rules.length===1 && document.getElementById('loading').hidden");
     assert.equal(await run("rules[0].params.windowSessions"),5);
     assert.equal(await run("rules[0].params.trigger.type"),'price_ma_cross');
     assert(await run("document.getElementById('rules').textContent.includes('고정')"));
     await run("document.querySelectorAll('#rules button')[2].click()");
     await until("rules.length===0 && document.getElementById('loading').hidden");
-    await run("document.getElementById('kind').value='relative_performance';document.getElementById('kind').dispatchEvent(new Event('change'));document.getElementById('param-benchmark').value='QQQ';document.getElementById('rule-form').requestSubmit()");
+    await run("document.getElementById('kind').value='relative_performance';document.getElementById('kind').dispatchEvent(new Event('change'));document.getElementById('param-benchmark').value='QQQ';window.submitRule()");
     await until("rules.length===1 && document.getElementById('loading').hidden");
     assert.equal(await run("rules[0].params.benchmark"),'QQQ');
     assert(await run("document.getElementById('rules').textContent.includes('현금배당 제외')"));
@@ -134,9 +148,9 @@ const server = http.createServer((req,res)=>{
     await until("rules.length===0 && document.getElementById('loading').hidden");
     await run("document.getElementById('kind').value='holding_return';document.getElementById('kind').dispatchEvent(new Event('change'))");
     assert.equal(await run("document.getElementById('param-useSavedPortfolio').checked"),false);
-    await run("document.getElementById('rule-form').requestSubmit()");
+    await run("window.submitRule()");
     assert.equal(await run("rules.length"),0);
-    await run("document.getElementById('param-useSavedPortfolio').checked=true;document.getElementById('rule-form').requestSubmit()");
+    await run("document.getElementById('param-useSavedPortfolio').checked=true;window.submitRule()");
     await until("rules.length===1 && document.getElementById('loading').hidden");
     assert.equal(await run("rules[0].params.useSavedPortfolio"),true);
     for(const [reason,expected] of [['average_cost_missing','평균 매입가를 입력'],['holding_removed','내역을 확인'],['fx_pending','환율 자료 준비 중']]){
@@ -146,7 +160,7 @@ const server = http.createServer((req,res)=>{
     }
     await run("document.querySelectorAll('#rules button')[2].click()");
     await until("rules.length===0 && document.getElementById('loading').hidden");
-    await run("document.getElementById('kind').value='dividend_event';document.getElementById('kind').dispatchEvent(new Event('change'));document.getElementById('param-dateField').value='payDate';document.getElementById('rule-form').requestSubmit()");
+    await run("document.getElementById('kind').value='dividend_event';document.getElementById('kind').dispatchEvent(new Event('change'));document.getElementById('param-dateField').value='payDate';window.submitRule()");
     await until("rules.length===1 && document.getElementById('loading').hidden");
     assert.equal(await run("rules[0].params.dateField"),'payDate');
     assert(await run("document.getElementById('rules').textContent.includes('배당 지급일')"));
@@ -160,7 +174,7 @@ const server = http.createServer((req,res)=>{
     assert(await run("document.getElementById('events').textContent.includes('설정 변경·정지로 취소된 신호')"));
     await run("events=[];document.querySelectorAll('#rules button')[2].click()");
     await until("rules.length===0 && document.getElementById('loading').hidden");
-    await run("document.getElementById('kind').value='filing';document.getElementById('kind').dispatchEvent(new Event('change'));document.getElementById('rule-form').requestSubmit()");
+    await run("document.getElementById('kind').value='filing';document.getElementById('kind').dispatchEvent(new Event('change'));window.submitRule()");
     await until("rules.length===1 && document.getElementById('loading').hidden");
     assert(await run("document.getElementById('rules').textContent.includes('첫 정상 조회')"));
     await run("events=[{session_date:'2026-10-24',payload:{symbol:'AAPL',label:'새 공시',kind:'filing',params:{},information:{title:'8-K · Current report',details:'SEC 접수일 2026-10-23',sourceUrl:'https://www.sec.gov/Archives/edgar/data/320193/000032019326000123/aapl.htm'},result:{values:{}}}}];document.getElementById('refresh').click()");
@@ -169,7 +183,7 @@ const server = http.createServer((req,res)=>{
     assert(await run("document.getElementById('events').textContent.includes('8-K')"));
     await run("events=[];document.querySelectorAll('#rules button')[2].click()");
     await until("rules.length===0 && document.getElementById('loading').hidden");
-    await run("document.getElementById('kind').value='price_ma_cross';document.getElementById('kind').dispatchEvent(new Event('change'));document.getElementById('rule-form').requestSubmit()");
+    await run("document.getElementById('kind').value='price_ma_cross';document.getElementById('kind').dispatchEvent(new Event('change'));window.submitRule()");
     await until("document.querySelectorAll('#rules button').length===3 && document.getElementById('loading').hidden");
     assert.equal(await run("rules[0].params.period"),200);
     assert.equal(await run("calls.find(c=>c.url==='/api/alerts/rules'&&c.method==='POST').headers['X-Portfolio-Account']"),'test-user');
@@ -179,7 +193,7 @@ const server = http.createServer((req,res)=>{
     await run("document.querySelectorAll('#rules button')[1].click();document.getElementById('rule-name').value='보존할 초안';rules[0].revision++;rules[0].params.period=50;document.getElementById('refresh').click()");
     await until("!document.getElementById('resolve-edit').hidden && document.getElementById('loading').hidden");
     assert.equal(await run("document.getElementById('rule-name').value"),'보존할 초안');
-    await run("window.confirm=()=>true;document.getElementById('resolve-edit').click();document.getElementById('rule-form').requestSubmit()");
+    await run("window.confirm=()=>true;document.getElementById('resolve-edit').click();window.submitRule()");
     await until("document.getElementById('status').textContent==='규칙을 저장했습니다.' && document.getElementById('loading').hidden");
     assert.equal(await run("JSON.parse(calls.filter(c=>c.url==='/api/alerts/rules/rule-1'&&c.method==='PATCH').at(-1).body).revision"),3);
     await run("rejectSave=true;document.getElementById('symbol').value='TQQQ';document.getElementById('watch-form').requestSubmit()");

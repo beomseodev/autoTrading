@@ -29,7 +29,8 @@
           <p class="card-note">한국시간 오전 8시대에 점검합니다. 같은 채널에서 접수되었거나 결과가 불확실한 신호는 다시 보내지 않습니다. 당일 묶음 준비 후 주기 변경은 다음 예정일부터 적용될 수 있습니다.</p><button class="button primary">푸시 설정 저장</button></form>
         <ul id="push-devices" class="alert-list"></ul>
       </section>
-      <section class="card"><h2>관심종목</h2><p>미국은 SCHD, TQQQ, QQQI · 한국은 005930.KS, 247540.KQ 형식으로 입력하세요.</p>
+      <p id="step-progress" role="status">1 / 3 · 종목 선택</p>
+      <section id="step-watch" class="card"><h2 tabindex="-1">1. 종목 선택</h2><p>종목을 검색해 ‘종목 확인’을 누른 뒤 ‘확인한 종목 추가’를 누르세요. 미국은 SCHD, TQQQ, QQQI · 한국은 005930.KS, 247540.KQ 형식으로 입력하세요.</p>
         <form id="watch-form"><label for="symbol">종목 코드·이름 검색</label><input id="symbol" list="symbol-results" maxlength="80" placeholder="SCHD 또는 종목명" required autocomplete="off"><datalist id="symbol-results"></datalist><button class="button primary">종목 확인</button></form>
         <div id="watch-preview" hidden><p id="watch-preview-detail" role="status"></p><button id="confirm-watch" class="button primary" type="button">확인한 종목 추가</button></div>
         <button id="import-holdings" class="button quiet">보유 종목 가져오기</button><p class="card-note">아래에서 종목을 선택하면 같은 규칙을 일괄 등록할 수 있습니다. 가져와도 기존 자산은 변경되지 않습니다.</p>
@@ -37,12 +38,14 @@
         <ul id="watchlist" class="alert-list"></ul>
         <p class="card-note">제거하면 연결 규칙도 중지·보관됩니다. 종목을 다시 추가해도 규칙은 자동 복원되지 않습니다. 복원하려면 같은 조건을 입력하고 ‘보관된 동일 조건 재사용’을 선택하세요.</p>
         <p class="card-note">최근 판정에는 정지된 규칙의 과거 결과도 포함됩니다. 현재 시세 상태가 아니며, 마지막 정상 평가 거래일은 아래 규칙별 상세에서 확인하세요.</p>
+        <button id="next-condition" type="button" class="button primary">다음: 조건 설정</button>
       </section>
-      <section class="card"><h2 id="rule-heading">조건 등록</h2>
+      <section id="step-rule" class="card" hidden><h2 id="rule-heading" tabindex="-1">2. 조건 설정</h2><p id="selected-summary"></p>
         <label for="template">빠른 설정</label><select id="template"><option value="">직접 설정</option><option value="ma200">200일 SMA 양방향 돌파</option><option value="ma50">50일·200일 SMA 교차</option><option value="change">일간 ±5%</option><option value="rsi30">RSI 30 하향 진입</option><option value="rsi70">RSI 70 상향 진입</option></select>
-        <form id="rule-form"><label for="rule-name">조건 이름 (선택)</label><input id="rule-name" maxlength="100"><label for="kind">알림 종류</label><select id="kind"></select><div id="params" class="params-grid"></div><p id="rule-meaning" class="card-note"></p><label><input id="restore-archived" type="checkbox"> 보관된 동일 조건이 있으면 새 적용 시점으로 재사용</label><button id="save-rule" class="button primary">선택 종목에 규칙 등록</button><button id="cancel-edit" class="button quiet" type="button" hidden>수정 취소</button><button id="resolve-edit" class="button quiet" type="button" hidden>최신 설정 확인 후 내 입력 유지</button></form>
+        <form id="rule-form"><label for="rule-name">조건 이름 (선택)</label><input id="rule-name" maxlength="100"><label for="kind">알림 종류</label><select id="kind"></select><div id="params" class="params-grid"></div><p id="rule-meaning" class="card-note"></p><label><input id="restore-archived" type="checkbox"> 보관된 동일 조건이 있으면 새 적용 시점으로 재사용</label><button id="save-rule" class="button primary">다음: 내용 확인</button><button id="back-watch" class="button quiet" type="button">이전: 종목 선택</button><button id="cancel-edit" class="button quiet" type="button" hidden>수정 취소</button><button id="resolve-edit" class="button quiet" type="button" hidden>최신 설정 확인 후 내 입력 유지</button></form>
         <p class="card-note">교차는 전일 선 이하에서 당일 선 위로, 또는 전일 선 이상에서 당일 선 아래로 이동했을 때입니다. 선에 닿거나 같은 방향에 머무르면 새 돌파가 아닙니다. EMA는 최초 종가에서 시작하며 볼린저 표준편차는 ddof=0입니다. 거래량 급증·신고저가·일간 급등락은 충족한 거래일마다 기록합니다.</p>
       </section>
+      <section id="step-confirm" class="card" hidden><h2 tabindex="-1">3. 내용 확인</h2><p id="confirm-summary"></p><p id="confirm-condition"></p><button id="confirm-rule" class="button primary" type="button">알림 규칙 등록</button> <button id="back-rule" class="button quiet" type="button">이전: 조건 설정</button></section>
       <section class="card"><h2>등록한 규칙과 최근 판정</h2><p>등록·재개·조건 변경 전에 끝난 신호는 메일로 보내지 않습니다. 정지 기간의 신호도 소급하지 않습니다.</p><ul id="rules" class="alert-list"></ul></section>
       <section class="card"><h2>신호 이력</h2><ul id="events" class="alert-list"></ul><button id="more-events" class="button quiet" hidden>이전 신호 더 보기</button></section>
       <section class="card"><h2>채널별 발송 결과</h2><p class="card-note">접수는 해당 공급자가 요청을 받았다는 뜻이며 수신함 도착·기기 표시와 다릅니다. 웹 푸시 결과가 불확실하면 중복을 막기 위해 자동 재전송하지 않습니다. 여러 브라우저 중 일부만 접수된 경우도 있으며 상세 이력은 화면에서 확인하세요.</p><ul id="digests" class="alert-list"></ul><button id="more-digests" class="button quiet" hidden>이전 결과 더 보기</button></section>

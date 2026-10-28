@@ -103,7 +103,14 @@ function parameterFields(kind,params,container,prefix='param-') {
   });
   return ()=>Object.fromEntries(controls.map(([key,c])=>[key,c.type==='checkbox'?c.checked:c.tagName==='SELECT'||c.type==='text'?c.value:Number(c.value)]));
 }
-function resetEdit(){state.edit=null;$('kind').disabled=false;$('rule-name').value='';$('cancel-edit').hidden=true;$('resolve-edit').hidden=true;$('restore-archived').checked=false;$('save-rule').textContent='선택 종목에 규칙 등록';$('rule-heading').textContent='조건 등록';fields(typeInfo().defaults);}
+function selectedSymbols(){return state.watches.filter(w=>state.selected.has(w.instrumentId)).map(w=>w.symbol).join(', ');}
+function showStep(step){
+  ['watch','rule','confirm'].forEach(name=>{$('step-'+name).hidden=name!==step;});
+  $('step-progress').textContent=({watch:'1 / 3 · 종목 선택',rule:'2 / 3 · 조건 설정',confirm:'3 / 3 · 내용 확인'})[step];
+  $('selected-summary').textContent='적용 종목: '+(state.edit?.symbol||selectedSymbols());
+  const heading=$('step-'+step).querySelector('h2');heading.focus();heading.scrollIntoView({block:'start'});
+}
+function resetEdit(){state.edit=null;$('kind').disabled=false;$('rule-name').value='';$('cancel-edit').hidden=true;$('resolve-edit').hidden=true;$('back-watch').hidden=false;$('restore-archived').checked=false;$('save-rule').textContent='다음: 내용 확인';$('rule-heading').textContent='2. 조건 설정';fields(typeInfo().defaults);}
 function render(){
   $('watchlist').replaceChildren();
   if(!state.watches.length)$('watchlist').append(element('li','등록한 관심종목이 없습니다.'));
@@ -117,7 +124,7 @@ function render(){
   });
   $('rules').replaceChildren();
   if(!state.rules.length)$('rules').append(element('li','등록한 규칙이 없습니다.'));
-  state.rules.forEach(r=>{const li=element('li'),detail=element('div',`${r.symbol} · ${r.name||state.settings.types.find(x=>x.type===r.kind).label}`,'detail');detail.append(element('small',describeRule(r.kind,r.params)),element('small',describeState(r)),element('small',r.enabled?'활성':'정지'),element('small','마지막 정상 평가일: '+(r.last_session||'없음')),element('small',r.last_result?(statuses[r.last_result.status]||r.last_result.status)+' · '+(reasons[r.last_result.reason]||r.last_result.reason||''):(state.settings.sendingEnabled?'자료 준비 중 · 다음 점검부터 평가합니다.':'운영 중지 · 활성화 후 다음 점검부터 평가합니다.')));li.append(detail,button(r.enabled?'정지':'재개',async()=>{await api('/api/alerts/rules/'+r.id,'PATCH',{revision:r.revision,enabled:!r.enabled});await refresh();}),button('수정',async()=>{state.edit=r;$('kind').value=r.kind;$('kind').disabled=true;$('rule-name').value=r.name;fields(r.params);$('cancel-edit').hidden=false;$('save-rule').textContent='조건 수정 저장';$('rule-heading').textContent=r.symbol+' 조건 수정';$('rule-heading').scrollIntoView({block:'center'});$('rule-name').focus();}),button('삭제',async()=>{await api('/api/alerts/rules/'+r.id,'DELETE');await refresh();}));$('rules').append(li);});
+  state.rules.forEach(r=>{const li=element('li'),detail=element('div',`${r.symbol} · ${r.name||state.settings.types.find(x=>x.type===r.kind).label}`,'detail');detail.append(element('small',describeRule(r.kind,r.params)),element('small',describeState(r)),element('small',r.enabled?'활성':'정지'),element('small','마지막 정상 평가일: '+(r.last_session||'없음')),element('small',r.last_result?(statuses[r.last_result.status]||r.last_result.status)+' · '+(reasons[r.last_result.reason]||r.last_result.reason||''):(state.settings.sendingEnabled?'자료 준비 중 · 다음 점검부터 평가합니다.':'운영 중지 · 활성화 후 다음 점검부터 평가합니다.')));li.append(detail,button(r.enabled?'정지':'재개',async()=>{await api('/api/alerts/rules/'+r.id,'PATCH',{revision:r.revision,enabled:!r.enabled});await refresh();}),button('수정',async()=>{state.edit=r;$('kind').value=r.kind;$('kind').disabled=true;$('rule-name').value=r.name;fields(r.params);$('cancel-edit').hidden=false;$('back-watch').hidden=true;$('save-rule').textContent='조건 수정 저장';$('rule-heading').textContent=r.symbol+' 조건 수정';showStep('rule');$('rule-name').focus();}),button('삭제',async()=>{await api('/api/alerts/rules/'+r.id,'DELETE');await refresh();}));$('rules').append(li);});
 }
 async function history(kind,append=false) {
   const result=await api('/api/alerts/'+kind+(append&&state[kind]?'?cursor='+encodeURIComponent(state[kind]):''));
@@ -267,19 +274,31 @@ $('confirm-watch').addEventListener('click',async()=>{
 });
 $('kind').addEventListener('change',()=>fields(typeInfo().defaults));
 $('template').addEventListener('change',()=>{const templates={ma200:['price_ma_cross',{}],ma50:['ma_cross',{}],change:['daily_change',{}],rsi30:['rsi_cross',{level:30,direction:'down'}],rsi70:['rsi_cross',{level:70,direction:'up'}]};const t=templates[$('template').value];if(t){resetEdit();$('kind').value=t[0];fields({...typeInfo().defaults,...t[1]});}});
+$('next-condition').addEventListener('click',()=>{
+  if(!state.selected.size){fail(new Error(state.watches.length?'관심종목 목록에서 적용할 종목의 체크박스를 선택해주세요.':'먼저 관심종목을 검색하고 종목 확인 후 추가해주세요.'));return;}
+  $('status').textContent='';showStep('rule');
+});
+$('back-watch').addEventListener('click',()=>showStep('watch'));
+$('back-rule').addEventListener('click',()=>showStep('rule'));
 $('rule-form').addEventListener('submit',async e=>{
   e.preventDefault();
   try {
     const params=state.readParams();
-    if(state.edit) await api('/api/alerts/rules/'+state.edit.id,'PATCH',{revision:state.edit.revision,params,name:$('rule-name').value});
-    else {
-      if(!state.selected.size) throw new Error('관심종목에서 적용할 종목을 선택해주세요.');
-      await api('/api/alerts/rules','POST',{instrumentIds:[...state.selected],type:$('kind').value,params,name:$('rule-name').value,restoreArchived:$('restore-archived').checked});
-    }
-    resetEdit(); await refresh(); $('status').textContent='규칙을 저장했습니다.';
+    if(state.edit){await api('/api/alerts/rules/'+state.edit.id,'PATCH',{revision:state.edit.revision,params,name:$('rule-name').value});resetEdit();await refresh();showStep('watch');$('status').textContent='규칙을 저장했습니다.';return;}
+    if(!state.selected.size){showStep('watch');throw new Error('관심종목 목록에서 적용할 종목을 선택해주세요.');}
+    $('confirm-summary').textContent='적용 종목: '+selectedSymbols();
+    $('confirm-condition').textContent=($('rule-name').value?$('rule-name').value+' · ':'')+describeRule($('kind').value,params)+($('restore-archived').checked?' · 보관된 동일 조건 재사용':'');
+    $('status').textContent='';showStep('confirm');
   } catch(error) {fail(error);}
 });
-$('cancel-edit').addEventListener('click',resetEdit);
+$('confirm-rule').addEventListener('click',async()=>{
+  try{
+    if(!state.selected.size){showStep('watch');throw new Error('관심종목 목록에서 적용할 종목을 선택해주세요.');}
+    await api('/api/alerts/rules','POST',{instrumentIds:[...state.selected],type:$('kind').value,params:state.readParams(),name:$('rule-name').value,restoreArchived:$('restore-archived').checked});
+    resetEdit();await refresh();showStep('watch');$('status').textContent='규칙을 저장했습니다. 등록한 규칙과 최근 판정에서 확인하세요.';
+  }catch(error){fail(error);}
+});
+$('cancel-edit').addEventListener('click',()=>{resetEdit();showStep('watch');});
 $('resolve-edit').addEventListener('click',()=>{
   const latest=state.rules.find(r=>r.id===state.edit?.id);
   if(!latest) {fail(new Error('이 조건은 삭제되었습니다. 수정 취소 후 새 조건으로 등록해주세요.'));return;}
