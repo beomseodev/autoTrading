@@ -56,6 +56,11 @@ const server = http.createServer((req,res)=>{
     await until("!document.getElementById('loading').hidden");
     assert(await run("document.getElementById('refresh').disabled"));
     await until("!document.getElementById('content').hidden && document.getElementById('loading').hidden");
+    assert.deepEqual(await run("Array.from(document.querySelectorAll('.sidebar nav a'), a => a.getAttribute('href'))"), ['/', '/#holdings', '/#goal', '/#macro', '/alerts', '/lab']);
+    assert.equal(await run("document.querySelector('.sidebar [aria-current=page]').getAttribute('href')"), '/alerts');
+    await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
+    assert.equal(await run("getComputedStyle(document.querySelector('.sidebar')).position"), 'static');
+    await send('Emulation.setDeviceMetricsOverride',{width:1280,height:900,deviceScaleFactor:1,mobile:false});
     assert.equal(await run("document.getElementById('kind').options.length"),fixture.types.length);
     assert.equal(await run('permissionRequests'),0,'Page load must not request permission');
     assert(await run("document.getElementById('delivery-note').textContent.includes('판정 이력이 갱신되지 않습니다')"));
