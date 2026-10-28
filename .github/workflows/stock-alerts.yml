@@ -1,0 +1,16 @@
+name: Stock alert checks
+on:
+  schedule:
+    - cron: '*/5 23 * * *'
+  workflow_dispatch:
+permissions: {}
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run alert check
+        env:
+          ALERT_CRON_SECRET: ${{ secrets.ALERT_CRON_SECRET }}
+        run: |
+          test -n "$ALERT_CRON_SECRET"
+          curl --fail --silent --show-error --max-time 240 -H "Authorization: Bearer $ALERT_CRON_SECRET" https://autotrading-nu.vercel.app/api/cron/stock-alerts

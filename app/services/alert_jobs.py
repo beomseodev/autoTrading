@@ -62,7 +62,8 @@ def initialize(now):
         if inserted:
             audience = conn.execute("SELECT id FROM alert_users WHERE (consent AND suppressed IS NULL) OR push_consent").fetchall()
             conn.execute("UPDATE alert_runs SET audience=%s WHERE id=%s", (json_value([str(u["id"]) for u in audience]), run_id))
-            conn.execute("""UPDATE alert_users SET legacy_consolidated=true WHERE consent AND suppressed IS NULL
+            if os.getenv("ALERT_EMAIL_TRANSPORT") != "gmail":
+                conn.execute("""UPDATE alert_users SET legacy_consolidated=true WHERE consent AND suppressed IS NULL
                 AND lower(email)=lower(%s) AND (%s='' OR google_sub=%s)""",
                          (os.getenv("GOOGLE_OWNER_EMAIL", ""), os.getenv("GOOGLE_OWNER_SUB", ""), os.getenv("GOOGLE_OWNER_SUB", "")))
             rules = conn.execute("""SELECT r.*,i.metadata,i.symbol FROM alert_rules r
@@ -285,6 +286,8 @@ def evaluate_task(task, run, token,portfolio_context=None):
 
 
 def legacy_section(user):
+    if os.getenv("ALERT_EMAIL_TRANSPORT") == "gmail":
+        return None
     if user["email"].casefold() != os.getenv("GOOGLE_OWNER_EMAIL", "").casefold():
         return None
     from app.dashboard_schemas import SavedDashboard
@@ -321,6 +324,7 @@ def prepare_digests(run, token, now, started):
             break
         email=channel=='email'
         if email and (not user['consent'] or user['suppressed'] or not email_configured()):continue
+        if email and os.getenv('ALERT_EMAIL_TRANSPORT') == 'gmail' and (user['email'].casefold() != os.getenv('GOOGLE_OWNER_EMAIL', '').casefold() or (os.getenv('GOOGLE_OWNER_SUB') and user['google_sub'] != os.getenv('GOOGLE_OWNER_SUB'))):continue
         if not email and (not user['push_consent'] or not alert_push.public_key()):continue
         frequency=user['email_frequency' if email else 'push_frequency']
         if frequency=='weekly' and run['digest_date'].weekday()!=0:continue
@@ -406,6 +410,10 @@ def send_digest(identity, run=None, token=None, *, deadline=None):
         user = conn.execute("SELECT * FROM alert_users WHERE id=%s FOR UPDATE", (row["user_id"],)).fetchone()
         row = conn.execute("SELECT * FROM alert_digests WHERE id=%s FOR UPDATE", (identity,)).fetchone()
         if not row or row["status"] not in ("pending", "sending", "unknown", "retryable_failed"):
+            return
+        # shortcut: SMTP 결과가 불확실하면 재전송하지 않는다, 멱등 발송 공급자를 도입하면 재시도한다.
+        if row['channel'] == 'email' and os.getenv('ALERT_EMAIL_TRANSPORT') == 'gmail' and row['status'] in ('sending', 'unknown'):
+            conn.execute("UPDATE alert_digests SET status='unknown',error='smtp_result_unknown' WHERE id=%s", (identity,))
             return
         if (row['channel']=='email' and not email_configured()) or (row['channel']=='push' and not alert_push.public_key()):return
         payload = row["payload"]

@@ -167,6 +167,8 @@ async function refresh() {
   }
   $('email').textContent='수신 주소: '+settings.email;
   $('consent').checked=settings.consent;
+  $('email-transport-note').textContent=settings.ownerEmailOnly?'이메일 알림은 운영자 본인에게 Gmail로 발송됩니다. 리밸런싱 알림은 별도로 발송됩니다.':'운영자 계정은 통합 발송 활성화 후 기존 리밸런싱 알림도 같은 메일로 받습니다. 해지 후 기존 별도 메일은 다시 켜지지 않습니다.';
+  if(settings.emailAvailable===false) $('email-transport-note').textContent='현재 이메일 알림은 운영자 계정에서만 사용할 수 있습니다.';
   $('email-frequency').value=settings.emailFrequency||'daily';
   $('frequency-note').textContent=settings.emailFrequency==='weekly'?'주간 요약 · 매주 월요일 한국시간 오전 8시대 · 최근 7일 새 신호가 있을 때 한 통':'일간 요약 · 한국시간 오전 8시대 · 새 신호가 있는 날 한 통';
   $('delivery-note').textContent=settings.sendingEnabled?'운영 점검과 발송이 활성화되어 있습니다.':'운영 점검과 이메일·웹 푸시 발송이 중지되어 판정 이력이 갱신되지 않습니다. 설정은 저장할 수 있습니다.';

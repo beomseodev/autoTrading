@@ -136,6 +136,7 @@ def alert_worker():
 def settings(request: Request):
     u = user(request)
     from app.services.alert_push import public_key
+    from app.auth import is_owner
     key=public_key()
     return {"email": u["email"], "consent": u["consent"], "revision": u["revision"],
             "emailFrequency":u['email_frequency'],
@@ -143,6 +144,8 @@ def settings(request: Request):
             'pushConfigured':bool(key),'pushPublicKey':key,
             "suppressed": u["suppressed"], "sendTime": "한국시간 오전 8시대 · "+('월요일 주간 요약' if u['email_frequency']=='weekly' else '새 신호가 있는 날만'),
             "sendingEnabled": os.getenv("STOCK_ALERTS_SEND_ENABLED") == "true",
+            "ownerEmailOnly": os.getenv("ALERT_EMAIL_TRANSPORT") == "gmail",
+            "emailAvailable": os.getenv("ALERT_EMAIL_TRANSPORT") != "gmail" or is_owner(request.session["user"]),
             "calendarConfigured": bool(os.getenv('BENZINGA_API_KEY') and os.getenv('BENZINGA_REQUESTS_PER_MINUTE')),
             "filingsConfigured": {'sec':bool(os.getenv('SEC_USER_AGENT')),'dart':bool(os.getenv('DART_API_KEY'))},
             "types": [{"type": k, "label": LABELS[k], "composable": k in CORE_TYPES, "defaults": normalize_rule(k, {"price": 100} if k == "price_cross" else {})} for k in PARAMS]}
@@ -151,6 +154,10 @@ def settings(request: Request):
 @router.patch("/api/alerts/settings")
 def set_settings(payload: SettingsInput, request: Request):
     u = user(request)
+    if payload.consent and os.getenv("ALERT_EMAIL_TRANSPORT") == "gmail":
+        from app.auth import is_owner
+        if not is_owner(request.session["user"]):
+            raise HTTPException(403, "현재 이메일 알림은 운영자 계정에서만 사용할 수 있습니다.")
     with database() as conn:
         current = lock_user(conn, u["id"])
         check_revision(current, payload.revision)
@@ -161,7 +168,7 @@ def set_settings(payload: SettingsInput, request: Request):
             suppressed=CASE WHEN suppressed='deleted' THEN NULL ELSE suppressed END,
             email_frequency=coalesce(%s,email_frequency) WHERE id=%s""",
                      (payload.consent, payload.consent,int(payload.emailFrequency is None or payload.consent!=current['consent']),payload.emailFrequency, u["id"]))
-        if payload.consent and os.getenv("STOCK_ALERTS_SEND_ENABLED") == "true":
+        if payload.consent and os.getenv("STOCK_ALERTS_SEND_ENABLED") == "true" and os.getenv("ALERT_EMAIL_TRANSPORT") != "gmail":
             from app.auth import is_owner
             if is_owner(request.session["user"]):
                 conn.execute("UPDATE alert_users SET legacy_consolidated=true WHERE id=%s", (u["id"],))
@@ -464,6 +471,10 @@ def email_test(request: Request):
     from app.services.alert_jobs import send_digest
     if os.getenv("STOCK_ALERTS_SEND_ENABLED") != "true" or not email_configured():
         raise HTTPException(503, "실제 발송은 꺼져 있습니다. 운영 설정 후 테스트할 수 있습니다.")
+    if os.getenv("ALERT_EMAIL_TRANSPORT") == "gmail":
+        from app.auth import is_owner
+        if not is_owner(request.session["user"]):
+            raise HTTPException(403, "현재 이메일 알림은 운영자 계정에서만 사용할 수 있습니다.")
     u = user(request)
     day = datetime.now(timezone(timedelta(hours=9))).date()
     identity = uuid4()

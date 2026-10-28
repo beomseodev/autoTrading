@@ -57,6 +57,8 @@ def install_auth(app):
         signed_callback = (request.method == "POST" and request.url.path == "/api/webhooks/alert-email")
         unsubscribe = request.url.path.startswith("/notifications/unsubscribe/")
         cron_secret = os.getenv("CRON_SECRET", "")
+        if request.url.path == "/api/cron/stock-alerts" and os.getenv("ALERT_CRON_SECRET"):
+            cron_secret = os.environ["ALERT_CRON_SECRET"]
         user = request.session.get("user")
         authenticated = is_authenticated(user)
         private = ((request.url.path.startswith("/api/") and (request.method, request.url.path) not in public_api)

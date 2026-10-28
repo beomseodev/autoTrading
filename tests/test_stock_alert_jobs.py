@@ -224,6 +224,20 @@ def test_deleting_alerts_never_revives_legacy_mail(db, monkeypatch):
     assert run_notification()["outcome"] == "consolidated"
 
 
+@pytest.mark.parametrize('status', ['sending', 'unknown'])
+def test_gmail_never_retries_an_uncertain_send(db, monkeypatch, status):
+    prepare(monkeypatch)
+    monkeypatch.setattr(jobs, 'send_payload', lambda *_: ('unknown', None))
+    jobs.process_alert_run(now=NOW)
+    with database() as conn:
+        identity = conn.execute('UPDATE alert_digests SET status=%s RETURNING id', (status,)).fetchone()['id']
+    monkeypatch.setenv('ALERT_EMAIL_TRANSPORT', 'gmail')
+    monkeypatch.setattr(jobs, 'send_payload', lambda *_: pytest.fail('SMTP acceptance is uncertain'))
+    jobs.send_digest(identity)
+    with database() as conn:
+        assert conn.execute('SELECT status FROM alert_digests WHERE id=%s', (identity,)).fetchone()['status'] == 'unknown'
+
+
 @pytest.mark.parametrize("first_state,expected", [("retryable_failed","pending"),("unknown","no_signals")])
 def test_next_day_releases_only_definite_nonacceptance(db, monkeypatch, first_state, expected):
     import time

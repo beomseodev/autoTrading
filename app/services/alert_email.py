@@ -13,6 +13,9 @@ from app.services.alert_metrics import record
 
 
 def email_configured():
+    if os.getenv("ALERT_EMAIL_TRANSPORT") == "gmail":
+        from app.services.notification_email import email_ready
+        return bool(email_ready() and len(os.getenv("ALERT_UNSUBSCRIBE_SECRET", "")) >= 32 and os.getenv("APP_BASE_URL"))
     return bool(os.getenv("RESEND_API_KEY") and os.getenv("ALERT_EMAIL_FROM") and
                 len(os.getenv("ALERT_UNSUBSCRIBE_SECRET", "")) >= 32 and os.getenv("APP_BASE_URL"))
 
@@ -82,7 +85,7 @@ def make_payload(user, day, events, deferred=0, legacy=None, test=False,frequenc
     lines.extend(["설정과 이력: " + base + "/alerts", "이메일 알림 해지: " + link,
                   "해지 전에 이미 접수된 메일은 한 통 도착할 수 있습니다."])
     text = "\n".join(lines)
-    return {"from": os.environ["ALERT_EMAIL_FROM"], "to": [user["email"]],
+    return {"from": os.environ["GOOGLE_OWNER_EMAIL"] if os.getenv("ALERT_EMAIL_TRANSPORT") == "gmail" else os.environ["ALERT_EMAIL_FROM"], "to": [user["email"]],
             "subject": ("[관심종목 알림] 메일 연결 테스트" if test else f"[{'주간 요약' if frequency=='weekly' else '관심종목 알림'}] {day} · {len({e['payload']['symbol'] for e in events})}종목 {len(events)}신호"),
             "text": text, "html": "<div style='white-space:pre-wrap'>" + escape(text) + "</div>",
             "headers": {"List-Unsubscribe": "<" + link + ">", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"}}
@@ -119,6 +122,15 @@ def readable_values(values,kind,params,currency):
 def send_payload(identity, payload):
     if not email_configured():
         raise HTTPException(503, "Resend 발신 도메인·키와 해지 설정이 필요합니다.")
+    if os.getenv("ALERT_EMAIL_TRANSPORT") == "gmail":
+        from app.services.notification_email import send_email
+        if len(payload.get("to", [])) != 1 or payload["to"][0].casefold() != os.environ["GOOGLE_OWNER_EMAIL"].casefold():
+            return "permanent_failed", None
+        try:
+            send_email(payload["subject"], payload["text"])
+            return "accepted", None
+        except HTTPException:
+            return "unknown", None
     try:
         record("emailCalls")
         response = httpx.post("https://api.resend.com/emails", json=payload,

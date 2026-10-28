@@ -4,6 +4,8 @@
 
 ## 개발 완료와 운영 활성화 구분
 
+운영자 본인 전용 Gmail 모드에서는 `ALERT_EMAIL_TRANSPORT=gmail`과 기존 `GOOGLE_OWNER_EMAIL`·`GMAIL_APP_PASSWORD`를 사용한다. 기존 리밸런싱 메일은 별도로 유지한다. `.github/workflows/stock-alerts.yml`은 GitHub Actions의 `ALERT_CRON_SECRET`과 Vercel의 같은 이름의 비밀값으로 한국시간 오전 8시대에 5분마다 점검을 요청한다. GitHub 예약은 지연·누락될 수 있으며 SMTP 접수 여부가 불확실하면 중복 방지를 위해 재발송하지 않는다. Gmail에는 반송 웹훅이나 수신 확인이 없으므로 받은 편지함에서 확인한다.
+
 평가 엔진·계정별 API·화면·PostgreSQL 원장·재개 실행·Resend 전송·해지·웹훅 경로가 구현되어 있다. 실공급자 계약·종목 커버리지, 발신 도메인, 운영 DB와 요금제 준비는 별도다. 현재 실제 발송은 기본 OFF이며 이 문서만으로 운영 검증이 완료된 것은 아니다.
 
 기존 `vercel.json`의 일일 Cron은 그대로 둔다. 실제 운영 플랜이 확인되지 않은 상태에서 분 Cron을 기본 배포에 넣어 Hobby 배포를 실패시키지 않기 위해, 활성화용 설정을 `vercel.stock-alerts.json`에 분리했다. Pro 확인 후 기존 파일에 해당 stock-alerts Cron을 반영하거나 Vercel CLI의 `--local-config vercel.stock-alerts.json`으로 배포한다. 활성화 전까지 기본 배포에는 새 자동 점검 일정이 없다.
