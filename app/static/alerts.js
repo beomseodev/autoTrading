@@ -259,7 +259,7 @@ $('watch-form').addEventListener('submit',async e=>{
     if(version!==searchVersion||query!==$('symbol').value.trim())return;
     state.preview={...meta,query};
     $('watch-preview-detail').textContent=`${meta.name} (${meta.symbol}) · ${meta.mic} · ${meta.currency}`;
-    $('watch-preview').hidden=false;$('confirm-watch').focus();
+    $('watch-preview').hidden=false;$('status').textContent='종목을 확인한 뒤 확인한 종목 추가를 눌러주세요.';$('confirm-watch').focus();
   } catch(error){fail(error);}
 });
 $('confirm-watch').addEventListener('click',async()=>{
@@ -275,6 +275,8 @@ $('confirm-watch').addEventListener('click',async()=>{
 $('kind').addEventListener('change',()=>fields(typeInfo().defaults));
 $('template').addEventListener('change',()=>{const templates={ma200:['price_ma_cross',{}],ma50:['ma_cross',{}],change:['daily_change',{}],rsi30:['rsi_cross',{level:30,direction:'down'}],rsi70:['rsi_cross',{level:70,direction:'up'}]};const t=templates[$('template').value];if(t){resetEdit();$('kind').value=t[0];fields({...typeInfo().defaults,...t[1]});}});
 $('next-condition').addEventListener('click',()=>{
+  if(!state.selected.size && $('symbol').value.trim() && !state.preview){$('watch-form').requestSubmit();return;}
+  if(!state.selected.size && state.preview){$('confirm-watch').focus();fail(new Error('확인한 종목 추가를 눌러주세요.'));return;}
   if(!state.selected.size){fail(new Error(state.watches.length?'관심종목 목록에서 적용할 종목의 체크박스를 선택해주세요.':'먼저 관심종목을 검색하고 종목 확인 후 추가해주세요.'));return;}
   $('status').textContent='';showStep('rule');
 });

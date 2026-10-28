@@ -102,7 +102,7 @@ const server = http.createServer((req,res)=>{
     assert(await run("!document.getElementById('operations-panel').hidden && document.getElementById('operations').textContent.includes('자료 조회 보류: 2건') && document.getElementById('operations').textContent.includes('결과 확인 필요: 1건')"));
     await run("document.getElementById('next-condition').click()");
     assert(await run("document.getElementById('status').textContent.includes('먼저 관심종목을 검색')"));
-    await run("document.getElementById('symbol').value='SCHD'; document.getElementById('watch-form').requestSubmit()");
+    await run("document.getElementById('symbol').value='SCHD'; document.getElementById('next-condition').click()");
     await until("document.getElementById('loading').hidden");
     assert.equal(await run("watch.length"),0,'Review the instrument before saving');
     assert(await run("document.getElementById('watch-preview').textContent.includes('SCHD') && document.getElementById('watch-preview').textContent.includes('ARCX') && document.getElementById('watch-preview').textContent.includes('USD')"));

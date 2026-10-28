@@ -16,7 +16,7 @@ from app.services.alert_store import database
 from app.services.alert_metrics import record
 
 POLICY = "raw-split-only-v1"
-MIC = {"XNAS": ("USD", "America/New_York", "XNYS"), "XNYS": ("USD", "America/New_York", "XNYS"),
+MIC = {"XNAS": ("USD", "America/New_York", "XNYS"), "XNMS": ("USD", "America/New_York", "XNYS"), "XNYS": ("USD", "America/New_York", "XNYS"),
        "XASE": ("USD", "America/New_York", "XNYS"), "ARCX": ("USD", "America/New_York", "XNYS"),
        "XKRX": ("KRW", "Asia/Seoul", "XKRX"), "XKOS": ("KRW", "Asia/Seoul", "XKRX")}
 

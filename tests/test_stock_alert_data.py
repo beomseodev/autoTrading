@@ -63,6 +63,15 @@ def test_canonical_share_class_mapping(monkeypatch):
     assert alert_data.resolve_instrument("BRK.B")["symbol"] == "BRK-B"
 
 
+@pytest.mark.parametrize("symbol", ["QQQ", "QQQM"])
+def test_nasdaq_global_market_etf(monkeypatch, symbol):
+    from app.services import alert_data
+    item = {"symbol": symbol, "mic_code": "XNMS", "currency": "USD", "country": "United States",
+            "exchange_timezone": "America/New_York", "instrument_type": "ETF", "instrument_name": symbol}
+    monkeypatch.setattr(alert_data, "provider_get", lambda *_: {"data": [item, {**item, "mic_code": "IEXG"}]})
+    assert alert_data.resolve_instrument(symbol)["mic"] == "XNMS"
+
+
 def test_provider_malformed_response_is_deferred(monkeypatch):
     import httpx
     from app.services import alert_data
