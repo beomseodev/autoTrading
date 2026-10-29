@@ -2,6 +2,55 @@ const assert = require('node:assert/strict');
 const {test} = require('node:test');
 const {browser, saved} = require('./helpers/dashboard.cjs');
 
+test('first-registration guidance distinguishes new, saved-empty and partially priced portfolios', () => {
+  const page = browser(null);
+  page.context.emptySnapshot = {hasAssets:false, complete:true, totalValue:0, cashValue:0,
+    holdings:[], baseCurrency:'KRW', fetchedAt:'2026-10-29T00:00:00Z', dayChange:null};
+  page.run('renderPortfolio(emptySnapshot)');
+  assert.equal(page.run('$("#getting-started").hidden'), false);
+  page.run('state.portfolioSavedAt="2026-10-29T00:00:00Z"; renderPortfolio(emptySnapshot)');
+  assert.equal(page.run('$("#getting-started").hidden'), true);
+  page.run('state.portfolioSavedAt=null; renderPortfolio({...emptySnapshot,hasAssets:true,complete:false,totalValue:null})');
+  assert.equal(page.run('$("#getting-started").hidden'), true);
+  assert.equal(page.run('$("#total-assets").textContent'), '—');
+  assert.match(page.run('$("#total-caption").textContent'), /계산 보류/);
+});
+
+test('section navigation restores only the target visibility and preserves financial data and layout', async () => {
+  const page = browser({sub:'account-A', email:'a@example.com'});
+  await page.run('initializeAccount()');
+  page.run(`state.portfolio.cashUSD=123; state.goal={currency:'USD',targetAmount:1000,monthlyContribution:10,annualReturnPct:5};
+    resizePanel('goal',6,500); movePanel('goal','market'); setWidgetVisible('goal',false); setWidgetVisible('macro',false)`);
+  const before = page.run('JSON.stringify({portfolio:state.portfolio,goal:state.goal})');
+  page.run('navigateToPanel("#goal")');
+  assert.equal(page.run('$(\'[data-panel="goal"]\').hidden'), false);
+  assert.equal(page.run('$(\'[data-panel="macro"]\').hidden'), true);
+  assert.equal(page.run('panelLayout.goal.span'), 6);
+  assert.equal(page.run('panelLayout.goal.height'), 500);
+  assert.equal(page.run('panelKeys()[0]'), 'goal');
+  await page.run('savePanelLayout()');
+  const restored = JSON.parse(page.stored.get('portfolio-dashboard-v1:account-A'));
+  assert.equal(restored.layout.goal.hidden, false);
+  assert.equal(JSON.stringify({portfolio:restored.portfolio,goal:restored.goal}), before);
+});
+
+test('unknown and premature section links do not mutate layout or storage', async () => {
+  const page = browser(null);
+  page.run('navigateToPanel("#goal")');
+  assert.equal(page.run('Object.keys(panelLayout).length'), 0);
+  await page.run('initializeAccount()');
+  page.run('setWidgetVisible("goal",false)');
+  const before = page.run('JSON.stringify(state)');
+  for (const hash of ['', '#unknown', '#goal,body', '#portfolio-dialog']) {
+    page.context.testHash = hash;
+    page.run('navigateToPanel(testHash)');
+  }
+  assert.equal(page.run('JSON.stringify(state)'), before);
+  assert.equal(page.run('$(\'[data-panel="goal"]\').hidden'), true);
+  assert.equal(page.stored.size, 0);
+  assert.equal(page.requests.filter(request => request.options?.method === 'POST').length, 0);
+});
+
 test('compact portfolio keeps quote dates and never presents incomplete totals as valid', () => {
   const page = browser(null);
   page.context.compactData = {

@@ -12,7 +12,7 @@ function browser(user, stored = new Map(), isOwner = false, cloud = false) {
     addEventListener(name, callback) { this.events[name] = callback; },
     appendChild(child) { this.children = this.children.filter(item => item !== child); this.children.push(child); },
     getBoundingClientRect() { return {width: 640, height: 400}; },
-    focus() {}, setPointerCapture() {},
+    focus() {}, scrollIntoView() {}, setPointerCapture() {},
   });
   const node = selector => {
     if (!nodes.has(selector)) nodes.set(selector, element());
@@ -23,6 +23,7 @@ function browser(user, stored = new Map(), isOwner = false, cloud = false) {
     console, Intl, Date, Number, Map, Set, JSON, structuredClone, crypto: require('node:crypto').webcrypto,
     setTimeout: () => 1, clearTimeout() {},
     document: {querySelector: node, createElement: element, addEventListener() {}},
+    window: {addEventListener() {}},
     getComputedStyle: () => ({columnGap: '16px'}), matchMedia: () => ({matches: false}),
     localStorage: {get length() { return stored.size; }, key: index => [...stored.keys()][index], getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key)},
     fetch: async (path, options) => {

@@ -73,6 +73,15 @@ function setWidgetVisible(key, visible) {
   updateWidgetList();
   layoutChanged();
 }
+function navigateToPanel(hash) {
+  const key = (hash || "").slice(1);
+  if (!layoutReady || !["holdings", "goal", "macro"].includes(key)) return;
+  if (panelSize(key).hidden) setWidgetVisible(key, true);
+  const section = $(hash);
+  section.setAttribute("tabindex", "-1");
+  section.focus({preventScroll: true});
+  section.scrollIntoView({block: "start"});
+}
 function movePanel(key, target, after = false) {
   if (key === target) return;
   const keys = panelKeys().filter(item => item !== key);
@@ -249,7 +258,9 @@ function setupDashboardLayout() {
     controls.appendChild(remove);
     panel.appendChild(controls);
   }
+  navigateToPanel(location.hash);
 }
+window.addEventListener("hashchange", () => navigateToPanel(location.hash));
 $("#reset-layout").addEventListener("click", () => {
   if (cloudLoading) return;
   applyPanelLayout();
@@ -695,6 +706,7 @@ function renderPortfolio(data) {
   $("#performance-status").textContent = `${ranked.length}개 종목 · 수익률 높은 순${unknown ? ` · 시세 또는 매입가 미확인 ${unknown}개 제외` : ""}${ranked.length ? "" : " · 보유 수량과 평균 매입가를 확인해주세요."}`;
   $("#performance-list").innerHTML = ranked.map(item => `<li><span><strong>${esc(item.name || item.ticker)}</strong><small>${esc(item.ticker)} · 가격 기준일 ${esc(item.asOf)}</small></span><b class="${tone(item.profitPct)}">${pct(item.profitPct)}</b></li>`).join("");
   const registered = data.hasAssets || Boolean(state.portfolioSavedAt);
+  $("#getting-started").hidden = registered;
   $("#total-assets").textContent = registered && data.complete ? money(data.totalValue) : "—";
   $("#total-caption").textContent = !registered ? "보유 자산을 등록해주세요" : data.complete ? `${data.baseCurrency} 기준 · 주식 + 현금` : "일부 시세 누락 · 총액 계산 보류";
   setMetric("#unrealized-profit", registered ? money(data.unrealizedProfit) : "—", data.unrealizedProfit);
@@ -951,8 +963,10 @@ function openGoal() {
 document.addEventListener("click", event => {
   if (event.target.closest("[data-edit-portfolio]")) openPortfolio();
   if (event.target.closest("[data-close-dialog]")) event.target.closest("dialog").close();
+  const panelLink = event.target.closest('.sidebar a[href^="#"]');
+  if (panelLink) navigateToPanel(panelLink.getAttribute("href"));
 });
-$("#add-owned-position").addEventListener("click", () => addOwnedRow());
+$("#add-owned-position").addEventListener("click", () => addOwnedRow()?.querySelector('[name=ticker]').focus());
 $("#edit-goal-btn").addEventListener("click", openGoal);
 $("#refresh-btn").addEventListener("click", () => { loadPortfolio(); loadMarkets(); });
 $("#portfolio-form").addEventListener("submit", async event => {
@@ -973,7 +987,10 @@ $("#portfolio-form").addEventListener("submit", async event => {
     $("#portfolio-dialog").close();
     message(!accountSub ? "입력을 적용했습니다. 비로그인 입력은 저장되지 않으며 새로고침·로그인 시 초기화됩니다." : cloudReady ? "보유 자산과 목표 비중을 계정에 저장했습니다. 최신 시세로 점검합니다." : "현재 브라우저에만 저장했습니다. 이메일 점검에는 반영되지 않습니다.");
     loadPortfolio();
-  } catch (error) { $("#portfolio-form-status").textContent = error.name === "QuotaExceededError" || error.name === "SecurityError" ? "브라우저 저장에 실패했습니다. 입력은 유지됩니다. 저장 공간과 권한을 확인해주세요." : error.message; }
+  } catch (error) {
+    $("#portfolio-form-status").textContent = error.name === "QuotaExceededError" || error.name === "SecurityError" ? "브라우저 저장에 실패했습니다. 입력은 유지됩니다. 저장 공간과 권한을 확인해주세요." : error.message;
+    $("#portfolio-form-status").scrollIntoView({block: "center"});
+  }
 });
 $("#goal-form").addEventListener("submit", async event => {
   event.preventDefault();
@@ -985,7 +1002,10 @@ $("#goal-form").addEventListener("submit", async event => {
     $("#goal-dialog").close();
     message(!accountSub ? "목표를 적용했습니다. 비로그인 입력은 저장되지 않으며 새로고침·로그인 시 초기화됩니다." : cloudReady ? "목표 가정을 계정에 저장했습니다." : "목표 가정을 현재 브라우저에만 저장했습니다.");
     loadGoal();
-  } catch (error) { $("#goal-form-status").textContent = error.name === "QuotaExceededError" || error.name === "SecurityError" ? "목표 저장에 실패했습니다. 현재 입력은 유지됩니다." : error.message; }
+  } catch (error) {
+    $("#goal-form-status").textContent = error.name === "QuotaExceededError" || error.name === "SecurityError" ? "목표 저장에 실패했습니다. 현재 입력은 유지됩니다." : error.message;
+    $("#goal-form-status").scrollIntoView({block: "center"});
+  }
 });
 
 async function initializeAccount() {
@@ -1000,6 +1020,7 @@ async function initializeAccount() {
       $("#cloud-status").textContent = "로그인 없이 이용할 수 있습니다. 입력은 저장되지 않으며 새로고침·로그인 시 초기화됩니다. 저장하려면 Google로 로그인해주세요.";
       $("#portfolio-form button[type=submit]").textContent = "적용하고 현황 보기";
       $("#goal-form button[type=submit]").textContent = "목표 적용·계산";
+      $("#portfolio-save-note").textContent = $("#goal-save-note").textContent = "현재 화면에만 적용됩니다. 새로고침·로그인·페이지 이동 시 입력이 초기화됩니다.";
       setupDashboardLayout();
       renderEmailStatus();
       loadMarkets();

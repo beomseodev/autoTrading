@@ -46,7 +46,11 @@
     </section>
     <div class="account-actions"><span id="signed-in-user"></span><a id="login-link" class="button quiet" href="/login">Google로 로그인</a><form id="logout-form" action="/auth/logout" method="post" hidden><button class="button quiet" type="submit">로그아웃</button></form></div>
 
-    <div class="layout-toolbar" aria-label="위젯 배치 설정"><span>↕ 핸들로 이동 · ↘ 모서리로 크기 조절 · 자산을 계정에 저장한 뒤 배치도 자동 저장됩니다.</span><button id="widget-list-button" class="button quiet" type="button" aria-expanded="false" aria-controls="widget-list">위젯 목록</button><button id="reset-layout" class="button quiet" type="button" disabled>기본 배치</button><button id="save-layout" class="button quiet" type="button" hidden>저장 재시도</button><p id="layout-status" class="card-note" role="status"></p></div>
+    <section id="getting-started" class="getting-started" aria-labelledby="getting-started-title" hidden>
+      <div><h2 id="getting-started-title">내 자산부터 등록해볼까요?</h2><p>종목과 현금을 입력하면 평가금액과 자산 구성을 한눈에 볼 수 있어요. 그다음 목표를 설정해보세요.</p></div>
+      <button class="button primary" data-edit-portfolio type="button">첫 보유 자산 등록</button>
+    </section>
+    <div class="layout-toolbar" aria-label="위젯 배치 설정"><details class="layout-help"><summary>화면 배치 안내</summary><p>↕ 핸들로 이동 · ↘ 모서리로 크기 조절. 방향키로도 조작할 수 있습니다. 자산을 계정에 저장한 뒤 배치도 자동 저장됩니다. 숨긴 위젯은 위젯 목록에서 다시 표시하세요.</p></details><button id="widget-list-button" class="button quiet" type="button" aria-expanded="false" aria-controls="widget-list">위젯 목록</button><button id="reset-layout" class="button quiet" type="button" disabled>기본 배치</button><button id="save-layout" class="button quiet" type="button" hidden>저장 재시도</button><p id="layout-status" class="card-note" role="status"></p></div>
     <div id="widget-list" class="widget-list" hidden aria-label="표시할 위젯 선택"></div>
     <div class="overview-grid">
     <div class="dashboard-panel" data-panel="market" data-panel-label="시장 지표" style="--panel-span:12">
@@ -153,7 +157,7 @@
       <div class="field-grid"><label>리밸런싱 허용폭 (%p)<input name="rebalanceTolerancePct" type="number" min="0.01" max="50" step="0.01" value="5" required /></label><label class="check-field"><input name="emailAlerts" type="checkbox" />허용폭 초과 시 이메일 알림 받기</label></div>
       <p class="card-note">개별 목표와 그룹 목표의 합계는 100% 이하이며 나머지는 현금 목표입니다. 한 종목은 한 그룹에만 포함할 수 있습니다. 그룹 내부 비율은 점검하지 않습니다. 이메일 알림에는 모든 종목의 개별 또는 그룹 목표가 필요합니다. 예: 목표 30%, 허용폭 5%p이면 25% 미만 또는 35% 초과 시 알립니다.</p>
       <p id="portfolio-form-status" class="form-status" role="status"></p>
-      <p class="card-note">저장하면 이 화면의 자산·목표·배치를 함께 계정에 반영합니다.</p>
+      <p id="portfolio-save-note" class="card-note">저장하면 이 화면의 자산·목표·배치를 함께 계정에 반영합니다.</p>
       <div class="dialog-actions"><button id="portfolio-recovery-btn" type="button" class="button quiet" hidden>보관된 초안 확인</button><button type="button" class="button quiet" data-close-dialog>취소</button><button type="submit" class="button primary">저장하고 현황 보기</button></div>
     </form>
   </dialog>
@@ -165,7 +169,7 @@
       <div class="field-grid"><label>목표의 통화<select name="currency"><option value="KRW">원화 (KRW)</option><option value="USD">달러 (USD)</option></select></label><label>목표 금액<input type="number" name="targetAmount" min="0.01" max="1000000000000000" step="0.01" placeholder="예: 100000000" required /></label><label>매월 추가 투자금<input type="number" name="monthlyContribution" min="0" max="1000000000000" step="0.01" placeholder="예: 500000" required /></label><label>가정 연 수익률 (%)<input type="number" name="annualReturnPct" min="-50" max="50" step="0.1" placeholder="예: 5" required /></label></div>
       <p class="card-note">입력 수익률과 ±3%p 가정으로 비교합니다(범위 −50~50%). 월 수익률 = (1 + 연 수익률)^(1/12) − 1. 매월 말 추가금을 더하며 60년 안에 도달하지 못하면 날짜를 제시하지 않습니다.</p>
       <p id="goal-form-status" class="form-status" role="status"></p>
-      <p class="card-note">저장하면 이 화면의 자산·목표·배치를 함께 계정에 반영합니다.</p>
+      <p id="goal-save-note" class="card-note">저장하면 이 화면의 자산·목표·배치를 함께 계정에 반영합니다.</p>
       <div class="dialog-actions"><button id="goal-recovery-btn" type="button" class="button quiet" hidden>보관된 초안 확인</button><button type="button" class="button quiet" data-close-dialog>취소</button><button type="submit" class="button primary">목표 저장·계산</button></div>
     </form>
   </dialog>

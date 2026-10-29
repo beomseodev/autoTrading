@@ -85,6 +85,11 @@ const server = http.createServer((req, res) => {
     assert.match(await evaluate('document.querySelector("#app-status").textContent'), /시세 조회 실패/);
     await send('Page.navigate', {url:'http://127.0.0.1:8777/lab'});
     await waitFor('document.querySelectorAll(".position-row").length === 3');
+    for (const width of [1280, 390, 320]) {
+      await send('Emulation.setDeviceMetricsOverride', {width, height:900, deviceScaleFactor:1, mobile:false});
+      assert(await evaluate('document.documentElement.scrollWidth <= innerWidth'), `Lab overflows at ${width}px`);
+      fs.writeFileSync(`output/ux-lab-${width}.png`, Buffer.from((await send('Page.captureScreenshot', {format:'png'})).data, 'base64'));
+    }
     for (const mode of ['single', 'compare', 'risk']) {
       await evaluate(mode === 'risk' ? 'document.querySelector("#risk-analysis").open = true; void runRiskProfile({preventDefault(){}})' : mode === 'compare' ? 'void runCompareBacktest()' : 'void runBacktest({preventDefault(){}})');
       const button = mode === 'risk' ? '#risk-submit-btn' : '#submit-btn';

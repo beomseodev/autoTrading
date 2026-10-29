@@ -54,12 +54,19 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
       assert(!result.exceptionDetails, JSON.stringify(result.exceptionDetails));
       return result.result.value;
     };
+    const waitFor = async expression => {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (await evaluate(expression)) return;
+        await delay(50);
+      }
+      assert.fail('Timed out: ' + expression);
+    };
     await send('Runtime.enable');
     await send('Page.enable');
     await send('Page.addScriptToEvaluateOnNewDocument', {source: `window.fetch = async (url, options) => {
       window.fixtureRequests = (window.fixtureRequests || 0) + 1;
       let result;
-      const accountTest = location.hash === '#layout-account-test';
+      const accountTest = location.hash === '#layout-account-test' || location.search.includes('account-test=1');
       if (url === '/auth/session') result = {user:accountTest ? {sub:'layout-browser-fixture',email:'layout-test@example.invalid'} : null, isOwner:false};
       else if (url === '/api/dashboard/state' && accountTest) {
         if (sessionStorage.getItem('recovery-offline')) return {ok:false,status:503,json:async()=>({detail:'검증용 연결 장애'})};
@@ -84,6 +91,49 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     }
     assert.equal(handles, 8);
     await evaluate('document.documentElement.style.scrollBehavior="auto"');
+    assert.equal(await evaluate('document.querySelector("#getting-started").hidden'), false);
+    fs.writeFileSync('output/ux-home-desktop.png', Buffer.from((await send('Page.captureScreenshot', {format:'png'})).data, 'base64'));
+    for (const width of [390, 320]) {
+      await send('Emulation.setDeviceMetricsOverride', {width, height:844, deviceScaleFactor:1, mobile:false});
+      assert(await evaluate('document.documentElement.scrollWidth <= innerWidth'), 'Empty home overflows on mobile');
+      fs.writeFileSync(`output/ux-home-${width}.png`, Buffer.from((await send('Page.captureScreenshot', {format:'png'})).data, 'base64'));
+      await evaluate('openPortfolio()');
+      assert(await evaluate(`getComputedStyle(document.querySelector('.owned-row .sr-only')).position === 'static'`), 'Mobile field labels are hidden');
+      assert.match(await evaluate('document.querySelector("#portfolio-save-note").textContent'), /현재 화면에만 적용/);
+      assert(await evaluate('document.querySelector("#portfolio-dialog").scrollWidth <= document.querySelector("#portfolio-dialog").clientWidth'), 'Editor overflows on mobile');
+      assert(await evaluate(`(() => { const r=document.querySelector('#portfolio-form button[type=submit]').getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; })()`), 'Apply button must be visible without scrolling');
+      await evaluate('document.querySelector("#add-owned-position").click()');
+      assert.equal(await evaluate('document.activeElement.name'), 'ticker');
+      fs.writeFileSync(`output/ux-editor-${width}.png`, Buffer.from((await send('Page.captureScreenshot', {format:'png'})).data, 'base64'));
+      await evaluate('document.querySelector("#portfolio-dialog").scrollTop = 10000');
+      assert(await evaluate(`(() => { const r=document.querySelector('.dialog-header .close-button').getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; })()`), 'Close button is lost while scrolling');
+      await evaluate(`document.querySelector('#portfolio-form [name=ticker]').value='AAPL'; document.querySelector('#portfolio-form').requestSubmit()`);
+      assert.match(await evaluate('document.querySelector("#portfolio-form-status").textContent'), /수량과 평균 매입가/);
+      assert(await evaluate(`(() => { const r=document.querySelector('#portfolio-form-status').getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; })()`), 'Validation message must be visible');
+      assert.equal(await evaluate('document.querySelector("#portfolio-form [name=ticker]").value'), 'AAPL');
+      await evaluate('document.querySelector("#portfolio-dialog").close()');
+      await evaluate('document.querySelector("#edit-goal-btn").focus(); document.querySelector("#edit-goal-btn").click()');
+      assert.match(await evaluate('document.querySelector("#goal-save-note").textContent'), /현재 화면에만 적용/);
+      assert(await evaluate('document.querySelector("#goal-dialog").scrollWidth <= document.querySelector("#goal-dialog").clientWidth'), 'Goal editor overflows on mobile');
+      await evaluate(`document.querySelector('#goal-form [name=targetAmount]').value='100000000';
+        document.querySelector('#goal-form [name=monthlyContribution]').value='500000';
+        document.querySelector('#goal-form [name=annualReturnPct]').value='5';
+        window.originalPersistState=persistState; persistState=async()=>{throw new Error('검증용 저장 실패')};
+        document.querySelector('#goal-form').requestSubmit()`);
+      await waitFor('document.querySelector("#goal-form-status").textContent.includes("검증용 저장 실패")');
+      assert.equal(await evaluate('document.querySelector("#goal-dialog").open'), true);
+      assert.equal(await evaluate('document.querySelector("#goal-form [name=targetAmount]").value'), '100000000');
+      assert(await evaluate(`(() => { const r=document.querySelector('#goal-form-status').getBoundingClientRect();
+        const top=document.querySelector('#goal-form .dialog-header').getBoundingClientRect().bottom;
+        const bottom=document.querySelector('#goal-form .dialog-actions').getBoundingClientRect().top;
+        return r.top >= top && r.bottom <= bottom; })()`), 'Goal error is covered by sticky controls');
+      await evaluate('persistState=originalPersistState');
+      await send('Input.dispatchKeyEvent', {type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+      await send('Input.dispatchKeyEvent', {type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+      assert.equal(await evaluate('document.querySelector("#goal-dialog").open'), false);
+      assert.equal(await evaluate('document.activeElement.id'), 'edit-goal-btn');
+    }
+    await send('Emulation.setDeviceMetricsOverride', {width:1280, height:1000, deviceScaleFactor:1, mobile:false});
     const before = await evaluate(`(() => {
       const panel = document.querySelector('[data-panel="goal"]');
       panel.querySelector('button.panel-resize').scrollIntoView({block:'center'});
@@ -119,6 +169,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     renderProjection(adaptiveProjection,100000);
     resizePanel('holdings',3,200); resizePanel('macro',3,200); resizePanel('allocation',4,220); resizePanel('goal',4,200);`);
     await delay(150);
+    assert.equal(await evaluate('document.querySelector("#getting-started").hidden'), true);
     const display = selector => evaluate(`getComputedStyle(document.querySelector(${JSON.stringify(selector)})).display`);
     assert.equal(await display('#holdings .table-scroll'), 'none');
     assert.notEqual(await display('#holdings-compact'), 'none');
@@ -238,6 +289,16 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     await evaluate(`document.querySelector('#widget-list-button').click(); document.querySelector('[data-widget="goal"]').click(); document.querySelector('[data-widget="performance"]').click()`);
     assert.equal(await evaluate('document.querySelector("[data-panel=goal]").hidden'),false);
     assert.equal(await evaluate('document.querySelector("[data-panel=performance]").hidden'),false);
+    await evaluate(`setWidgetVisible('goal',false); document.querySelector('.sidebar a[href="#goal"]').click()`);
+    await delay(100);
+    assert.equal(await evaluate('document.querySelector("[data-panel=goal]").hidden'),false);
+    assert.equal(await evaluate('document.activeElement.id'),'goal');
+    await evaluate(`setWidgetVisible('goal',false); document.querySelector('.sidebar a[href="#goal"]').click()`);
+    assert.equal(await evaluate('document.querySelector("[data-panel=goal]").hidden'),false, 'Repeated navigation must reveal the same hidden panel');
+    await evaluate(`document.querySelector('.sidebar a[href="#holdings"]').click()`);
+    await waitFor('location.hash === "#holdings" && document.activeElement.id === "holdings"');
+    await evaluate(`setWidgetVisible('goal',false); history.back()`);
+    await waitFor('location.hash === "#goal" && !document.querySelector("[data-panel=goal]").hidden && document.activeElement.id === "goal"');
     assert(await evaluate('document.documentElement.scrollWidth <= innerWidth'));
     await evaluate('document.querySelector("#widget-list").scrollIntoView({block:"start"})');
     fs.writeFileSync('output/widget-list-mobile.png',Buffer.from((await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false})).data,'base64'));
@@ -287,9 +348,16 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.equal(await evaluate('state.portfolio.cashUSD'),0);
     assert.equal(await evaluate('pendingDraft'),null);
     assert(await evaluate('Object.keys(localStorage).some(k=>k.startsWith(STORAGE_KEY+"-backup:"))'));
+    await send('Page.navigate',{url:'http://127.0.0.1:8766/?account-test=1#macro'});
+    for (let attempt=0;attempt<100;attempt++) {
+      if (await evaluate('typeof layoutReady!=="undefined" && layoutReady && !cloudLoading')) break;
+      await delay(50);
+    }
+    assert.equal(await evaluate('document.querySelector("[data-panel=macro]").hidden'), false, 'A bookmarked section must reveal a saved hidden widget');
+    assert.equal(await evaluate('document.activeElement.id'), 'macro');
     await evaluate('sessionStorage.removeItem("layout-fixture-state"); Object.keys(localStorage).filter(k=>k.startsWith(STORAGE_KEY)).forEach(k=>localStorage.removeItem(k))');
     assert.deepEqual(errors, []);
-    console.log('Real Chrome: resizing, compact summaries, partial-data warnings, responsive table columns, scenario detail, chart height, no extra requests and desktop/mobile overflow passed.');
+    console.log('Real Chrome passed: onboarding, mobile labels and sticky actions, form errors and input preservation, Escape/focus return, hidden sections and history/bookmarks, layout resizing, financial recovery and desktop/mobile overflow.');
   } finally {
     socket?.close(); chrome.kill(); server.close();
   }
