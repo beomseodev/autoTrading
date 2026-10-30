@@ -732,7 +732,7 @@ function renderPortfolio(data) {
   const fxNote = data.fx ? `환율 ${number(data.fx.value)}원/USD (가격 기준일 ${data.fx.asOf})` : "환율 조회 불가";
   const fetchedTimes = [...data.holdings.filter(item => item.available).map(item => item.fetchedAt), data.fx?.fetchedAt].filter(Boolean).sort();
   const oldestFetch = fetchedTimes[0];
-  $("#valuation-note").textContent = `Yahoo 제공 시세 · 지연되거나 누락될 수 있으며 5분마다 자동 갱신합니다. 자료 조회 ${dataFetchedAt(oldestFetch)} (한국시간, 가장 오래된 자료 기준) · 가격 기준일은 거래소 현지 날짜이며 실시간 체결 시각은 제공하지 않습니다. 화면 조회 ${new Date(data.fetchedAt).toLocaleString("ko-KR", {timeZone: "Asia/Seoul", hour12: false})} (한국시간) · ${fxNote}. 종목별 평가손익을 표시 통화로 환산하며 취득 환율에 따른 환차손익·실현손익·배당 누계는 제외합니다.`;
+  $("#valuation-note").textContent = `Yahoo 제공 시세 · 지연되거나 누락될 수 있으며 6시간마다 자동 갱신합니다. 새로고침 버튼으로 언제든 시세를 다시 조회할 수 있습니다. 자료 조회 ${dataFetchedAt(oldestFetch)} (한국시간, 가장 오래된 자료 기준) · 가격 기준일은 거래소 현지 날짜이며 실시간 체결 시각은 제공하지 않습니다. 화면 조회 ${new Date(data.fetchedAt).toLocaleString("ko-KR", {timeZone: "Asia/Seoul", hour12: false})} (한국시간) · ${fxNote}. 종목별 평가손익을 표시 통화로 환산하며 취득 환율에 따른 환차손익·실현손익·배당 누계는 제외합니다.`;
   $("#updated-at").textContent = `자료 조회 ${dataFetchedAt(oldestFetch)} (한국시간)`;
   renderAllocation(data);
   const check = data.rebalance;
@@ -979,7 +979,7 @@ $("#add-owned-position").addEventListener("click", () => addOwnedRow()?.querySel
 $("#edit-goal-btn").addEventListener("click", openGoal);
 function refreshDashboard(force = false) {
   if (!layoutReady || cloudLoading || portfolioBusy || marketBusy || (!force && document.hidden)) return;
-  if (!force && Date.now() - Math.min(lastMarketRefresh, lastPortfolioRefresh) < 300000) return;
+  if (!force && Date.now() - Math.min(lastMarketRefresh, lastPortfolioRefresh) < 6 * 60 * 60 * 1000) return;
   loadPortfolio(force);
   loadMarkets(force);
 }

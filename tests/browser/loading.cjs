@@ -79,6 +79,7 @@ const server = http.createServer((req, res) => {
     await waitFor('document.querySelector("#data-loading").hidden');
     assert.equal(await evaluate('document.querySelector("#refresh-btn").disabled'), false);
     await evaluate('document.querySelector("#refresh-btn").click()');
+    assert.deepEqual(await evaluate('requests.map(item => item.url).sort()'), ['/api/dashboard/markets?refresh=true', '/api/dashboard/portfolio?refresh=true'], 'Manual refresh must bypass the cache immediately after initial load');
     assert.match(await evaluate('document.querySelector("#refresh-btn").textContent'), /불러오는 중/);
     fs.writeFileSync('output/loading-desktop.png', Buffer.from((await send('Page.captureScreenshot', {format:'png'})).data, 'base64'));
     await send('Emulation.setDeviceMetricsOverride', {width:390, height:844, deviceScaleFactor:1, mobile:true});
@@ -94,8 +95,10 @@ const server = http.createServer((req, res) => {
     assert.match(await evaluate('document.querySelector("#app-status").textContent'), /시세 조회 실패/);
     assert.match(await evaluate('document.querySelector("#updated-at").textContent'), /시세 조회 실패/);
     await evaluate('autoRefresh()');
-    assert.equal(await evaluate('requests.length'), 0, 'Automatic retry must respect the five-minute interval');
-    await evaluate('lastMarketRefresh = lastPortfolioRefresh = Date.now() - 300001; Object.defineProperty(document,"hidden",{configurable:true,value:true}); autoRefresh()');
+    assert.equal(await evaluate('requests.length'), 0, 'Automatic retry must respect the six-hour interval');
+    await evaluate('lastMarketRefresh = lastPortfolioRefresh = Date.now() - 21540000; autoRefresh()');
+    assert.equal(await evaluate('requests.length'), 0, 'No automatic refresh before six hours, even after five hours and 59 minutes');
+    await evaluate('lastMarketRefresh = lastPortfolioRefresh = Date.now() - 21600001; Object.defineProperty(document,"hidden",{configurable:true,value:true}); autoRefresh()');
     assert.equal(await evaluate('requests.length'), 0, 'Hidden pages must not poll');
     await evaluate('Object.defineProperty(document,"hidden",{configurable:true,value:false}); document.dispatchEvent(new Event("visibilitychange"))');
     await waitFor('requests.some(r => r.url === "/auth/session")');
@@ -108,8 +111,9 @@ const server = http.createServer((req, res) => {
     assert.match(await evaluate('document.querySelector("#holdings-body").textContent'), /2026-10-29/);
     assert.match(await evaluate('document.querySelector("#updated-at").textContent'), /자료 조회/);
     assert.equal(await evaluate('document.querySelector("#updated-at").textContent.includes(dataFetchedAt("2026-10-29T20:01:00Z"))'), true, 'Show quote fetch time rather than response time');
-    await evaluate('lastMarketRefresh = lastPortfolioRefresh = Date.now() - 300001; autoRefresh(); autoRefresh()');
-    assert.equal(await evaluate('requests.length'), 2, 'Timer refresh must run once after five minutes');
+    assert.match(await evaluate('document.querySelector("#valuation-note").textContent'), /6시간마다 자동 갱신/);
+    await evaluate('lastMarketRefresh = lastPortfolioRefresh = Date.now() - 21600001; autoRefresh(); autoRefresh()');
+    assert.equal(await evaluate('requests.length'), 2, 'Timer refresh must run once after six hours');
     await evaluate(`reply("/api/dashboard/portfolio", ${JSON.stringify(sample)}); reply("/api/dashboard/markets", {markets:[], macro:[]})`);
     await waitFor('document.querySelector("#data-loading").hidden');
     await send('Page.navigate', {url:'http://127.0.0.1:8777/lab'});
