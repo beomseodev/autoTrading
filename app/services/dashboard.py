@@ -10,12 +10,13 @@ from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from time import time
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 from curl_cffi import requests
 import yfinance as yf
 
 from app.dashboard_schemas import PortfolioSnapshotRequest
-from app.services.rebalance_alerts import evaluate_rebalance
+from app.services.rebalance_alerts import evaluate_rebalance, quote_date_problem
 from app.services.symbol_search import stock_name
 
 
@@ -39,19 +40,38 @@ def finite_number(value, *, positive=False):
 def quote(symbol: str, bucket: int) -> dict:
     ticker = yf.Ticker(symbol)
     frame = ticker.history(period="1mo", auto_adjust=False, raise_errors=True, timeout=12)
-    close = frame["Close"].dropna()
-    if len(close) < 2:
+    close = frame["Close"].dropna().sort_index()
+    if close.empty:
         raise ValueError("최근 두 거래일의 시세가 없습니다.")
     value = finite_number(close.iloc[-1], positive=True)
-    previous = finite_number(close.iloc[-2], positive=True)
-    currency = ticker.get_history_metadata().get("currency")
+    as_of = close.index[-1].date()
+    metadata = ticker.get_history_metadata()
+    now = datetime.now(timezone.utc)
+    # Yahoo can publish a regular-market quote before filling the latest daily bar.
+    try:
+        market_time = datetime.fromtimestamp(float(metadata["regularMarketTime"]), timezone.utc)
+        market_date = market_time.astimezone(ZoneInfo(metadata["exchangeTimezoneName"])).date()
+        market_value = finite_number(metadata["regularMarketPrice"], positive=True)
+        if market_time <= now and market_date > as_of:
+            value, as_of = market_value, market_date
+    except (KeyError, TypeError, ValueError, OverflowError, OSError):
+        pass
+    prior = close.loc[[stamp.date() < as_of for stamp in close.index]]
+    if prior.empty:
+        raise ValueError("최근 두 거래일의 시세가 없습니다.")
+    previous = finite_number(prior.iloc[-1], positive=True)
+    problem = quote_date_problem(
+        {"holdings": [] if symbol == "KRW=X" else [{"ticker": symbol, "asOf": as_of.isoformat()}],
+         "fx": {"asOf": as_of.isoformat()}}, symbol == "KRW=X", now)
+    if problem:
+        raise ValueError(problem)
     return {
         "symbol": symbol, "value": value, "previous": previous,
         "name": stock_name(symbol, bucket) if not symbol.startswith("^") and symbol != "KRW=X" else symbol,
         "changePct": (value / previous - 1) * 100,
-        "asOf": close.index[-1].date().isoformat(),
-        "previousAsOf": close.index[-2].date().isoformat(), "currency": currency,
-        "fetchedAt": datetime.now(timezone.utc).isoformat(),
+        "asOf": as_of.isoformat(),
+        "previousAsOf": prior.index[-1].date().isoformat(), "currency": metadata.get("currency"),
+        "fetchedAt": now.isoformat(),
     }
 
 
@@ -91,19 +111,23 @@ def macro_observation(series: str, bucket: int) -> dict:
 
 class DashboardService:
     def get_quote(self, symbol: str) -> dict:
-        return quote(symbol, getattr(self, "_quote_bucket", int(time() // 300))).copy()
+        fetch = quote.__wrapped__ if getattr(self, "_refresh", False) else quote
+        return fetch(symbol, getattr(self, "_quote_bucket", int(time() // 300))).copy()
 
     def get_macro(self, series: str) -> dict:
         return macro_observation(series, int(time() // 1800)).copy()
 
-    def market_overview(self) -> dict:
+    def market_overview(self, *, refresh: bool = False) -> dict:
+        provider = copy(self)
+        provider._refresh = refresh
         def market_item(spec):
             symbol, label, unit = spec
             source = "https://finance.yahoo.com/quote/" + symbol.replace("^", "%5E") + "/"
             item = {"id": symbol, "label": label, "unit": unit, "source": source}
             try:
-                return {**item, **self.get_quote(symbol), "available": True}
+                return {**item, **provider.get_quote(symbol), "available": True}
             except Exception:
+                logging.getLogger(__name__).exception("Market quote failed: %s", symbol)
                 return {**item, "available": False, "error": "시세를 불러오지 못했습니다."}
 
         def macro_item(spec):
@@ -121,15 +145,16 @@ class DashboardService:
             macros = list(pool.map(macro_item, MACRO))
         return {"markets": markets, "macro": macros}
 
-    def portfolio_snapshot(self, request: PortfolioSnapshotRequest) -> dict:
+    def portfolio_snapshot(self, request: PortfolioSnapshotRequest, *, refresh: bool = False) -> dict:
         # Freeze the cache bucket per request without sharing mutable state across requests.
         provider = copy(self)
         provider._quote_bucket = int(time() // 300)
+        provider._refresh = refresh
         fx = None
         try:
             fx = provider.get_quote("KRW=X")
         except Exception:
-            pass
+            logging.getLogger(__name__).exception("FX quote failed")
         def convert(value, currency, *, previous=False):
             if currency == request.baseCurrency:
                 return value
@@ -150,6 +175,7 @@ class DashboardService:
                 return {**item, "name": price.get("name") or position.ticker, "currency": currency, "available": True, "price": price["value"],
                         "previousPrice": price["previous"], "asOf": price["asOf"],
                         "previousAsOf": price["previousAsOf"],
+                        "fetchedAt": price.get("fetchedAt"),
                         "valueUSD": value if currency == "USD" else value / fx["value"] if fx else None,
                         "costUSD": cost if currency == "USD" else cost / fx["value"] if fx else None,
                         "profitUSD": (value - cost) if currency == "USD" else (value - cost) / fx["value"] if fx else None,
@@ -157,9 +183,10 @@ class DashboardService:
                         "previousValue": convert(position.quantity * price["previous"], currency, previous=True),
                         "profitPct": (value / cost - 1) * 100 if cost else None}
             except Exception:
+                logging.getLogger(__name__).exception("Holding quote failed: %s", position.ticker)
                 return {**item, "currency": "KRW" if position.ticker.endswith((".KS", ".KQ")) else "USD",
                         "available": False, "value": None,
-                        "error": "시세를 확인할 수 없습니다. 종목 코드(.KS/.KQ)를 확인해주세요."}
+                        "error": "최신 시세를 확인할 수 없습니다. 잠시 후 다시 조회해주세요."}
 
         with ThreadPoolExecutor(max_workers=6) as pool:
             holdings = list(pool.map(holding, request.positions))

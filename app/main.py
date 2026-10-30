@@ -72,13 +72,13 @@ def get_dashboard_service() -> DashboardService:
 
 
 @app.get("/api/dashboard/markets")
-def dashboard_markets(service: DashboardService = Depends(get_dashboard_service)) -> dict:
-    return service.market_overview()
+def dashboard_markets(service: DashboardService = Depends(get_dashboard_service), refresh: bool = False) -> dict:
+    return service.market_overview(refresh=refresh)
 
 
 @app.post("/api/dashboard/portfolio")
-def dashboard_portfolio(payload: PortfolioSnapshotRequest, service: DashboardService = Depends(get_dashboard_service)) -> dict:
-    return service.portfolio_snapshot(payload)
+def dashboard_portfolio(payload: PortfolioSnapshotRequest, service: DashboardService = Depends(get_dashboard_service), refresh: bool = False) -> dict:
+    return service.portfolio_snapshot(payload, refresh=refresh)
 
 
 @app.get("/api/dashboard/symbols")

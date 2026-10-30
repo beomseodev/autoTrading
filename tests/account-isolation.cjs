@@ -8,7 +8,7 @@ test('prices show each market date separately from the Korean screen query time'
   page.context.viewData = {
     hasAssets: true, complete: false, baseCurrency: 'KRW', totalValue: null,
     dayChange: null, fetchedAt: '2026-10-22T23:30:00Z',
-    fx: {value: 1400, asOf: '2026-10-22'},
+    fx: {value: 1400, asOf: '2026-10-22', fetchedAt: '2026-10-22T23:25:00Z'},
     holdings: [
       {ticker: '005930.KS', available: true, currency: 'KRW', price: 70000, averageCost: 60000, quantity: 1, asOf: '2026-10-22', value: 70000, weightPct: null},
       {ticker: 'AAPL', available: true, currency: 'USD', price: 200, averageCost: 150, quantity: 1, asOf: '2026-10-21', value: 280000, weightPct: null},
@@ -24,7 +24,7 @@ test('prices show each market date separately from the Korean screen query time'
   assert.match(note, /거래소 현지 날짜/);
   assert.match(note, /환율.*가격 기준일 2026-10-22/);
   assert.match(note, /화면 조회 2026\. 10\. 23\./);
-  assert.match(page.run('$("#updated-at").textContent'), /화면 조회.*08:30.*한국시간/);
+  assert.match(page.run('$("#updated-at").textContent'), /자료 조회.*08:25.*한국시간/);
 });
 
 test('guest uses memory only, never reads or writes account backups or cloud state', async () => {

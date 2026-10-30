@@ -182,7 +182,9 @@ def test_overlapping_snapshots_keep_their_own_cache_buckets(clock, monkeypatch):
     assert not hasattr(service, '_quote_bucket')
 
 
-def test_quote_fetches_two_sessions_across_long_holiday(monkeypatch):
+def test_quote_fetches_two_sessions_across_long_holiday(monkeypatch, clock):
+    clock('2025-10-08T03:00:00+00:00')
+    monkeypatch.setattr('app.services.dashboard.datetime', rebalance.datetime)
     class Ticker:
         def history(self, **kwargs):
             assert kwargs['period'] == '1mo'

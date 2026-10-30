@@ -218,6 +218,7 @@ def test_holding_preserves_resolved_stock_name(ticker, currency, name):
 
 
 def test_quote_includes_name_and_caches_lookup(monkeypatch):
+    monkeypatch.setattr('app.services.dashboard.quote_date_problem', lambda *args: None)
     class Ticker:
         def history(self, **kwargs):
             return pd.DataFrame({'Close':[100,110]}, index=pd.date_range('2026-10-20',periods=2))

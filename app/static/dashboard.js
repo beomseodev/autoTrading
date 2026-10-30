@@ -626,18 +626,23 @@ function updateRefreshButton() {
   $("#refresh-btn").classList.toggle("loading-indicator", busy);
 }
 
+function dataFetchedAt(value) {
+  return value ? new Date(value).toLocaleString("ko-KR", {timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false}) : "미확인";
+}
 function renderMarket(data) {
-  $("#market-strip").innerHTML = data.markets.map(item => `<article class="market-item"><span>${esc(item.label)}</span><strong>${item.available ? number(item.value) : "—"}</strong><small class="${item.available ? tone(item.changePct) : "muted"}">${item.available ? pct(item.changePct) : "조회 불가"}</small><a class="market-meta" href="${esc(item.source)}" target="_blank" rel="noopener noreferrer">${item.available ? `가격 기준일 ${esc(item.asOf)} · Yahoo Finance ↗` : "출처 확인 ↗"}</a></article>`).join("");
+  $("#market-strip").innerHTML = data.markets.map(item => `<article class="market-item"><span>${esc(item.label)}</span><strong>${item.available ? number(item.value) : "—"}</strong><small class="${item.available ? tone(item.changePct) : "muted"}">${item.available ? pct(item.changePct) : "조회 불가"}</small><a class="market-meta" href="${esc(item.source)}" target="_blank" rel="noopener noreferrer">${item.available ? `가격 기준일 ${esc(item.asOf)} · 자료 조회 ${esc(dataFetchedAt(item.fetchedAt))} (한국시간) · Yahoo Finance ↗` : "출처 확인 ↗"}</a></article>`).join("");
   $("#macro-list").innerHTML = data.macro.map(item => `<article class="macro-item"><div class="macro-top"><a href="${esc(item.source)}" title="${esc(item.description)}" target="_blank" rel="noopener noreferrer">${esc(item.label)} ↗</a><strong>${item.available ? `${number(item.value)}%` : "—"}</strong></div><div class="macro-bottom"><span>${item.available ? `관측 ${esc(item.asOf)}` : "데이터 조회 불가"}</span><span>${item.available ? `${item.change > 0 ? "+" : ""}${number(item.change)}%p` : "잠시 후 새로고침"}</span></div><p class="macro-meaning">${esc(item.description)}</p></article>`).join("");
 }
-async function loadMarkets() {
+let lastMarketRefresh = 0, lastPortfolioRefresh = 0;
+async function loadMarkets(refresh = false) {
+  lastMarketRefresh = Date.now();
   const sequence = ++marketSequence;
   marketBusy = true;
   $("#market-strip").setAttribute("aria-busy", "true");
   $("#macro-list").setAttribute("aria-busy", "true");
   updateRefreshButton();
   try {
-    const data = await api("/api/dashboard/markets");
+    const data = await api("/api/dashboard/markets" + (refresh ? "?refresh=true" : ""));
     if (sequence === marketSequence) renderMarket(data);
   } catch {
     if (sequence === marketSequence) {
@@ -718,21 +723,24 @@ function renderPortfolio(data) {
   $("#holding-count").textContent = `${data.holdings.length}개 종목`;
   $("#holdings-description").textContent = state.portfolioSavedAt ? `직접 입력 · 수정 ${new Date(state.portfolioSavedAt).toLocaleDateString("ko-KR")} · 가격·매입가 현지 통화` : "한국·미국 주식 · ETF / 직접 입력 / 가격·매입가 현지 통화";
   if (data.holdings.length) {
-    $("#holdings-body").innerHTML = data.holdings.map(item => `<tr><td><strong>${esc(item.name || item.ticker)}</strong><small>${esc(item.ticker)} · ${item.available ? esc(item.currency) : "시세 미확인"}</small></td><td class="number" data-label="수량">${number(item.quantity, 6)}</td><td class="number" data-label="최근 가격">${item.available ? money(item.price, item.currency) : "—"}${item.available ? `<small>가격 기준일 ${esc(item.asOf)}</small>` : ""}<small class="price-cost-detail">평균 ${money(item.averageCost, item.currency)}</small></td><td class="number" data-label="평가금액">${money(item.value)}</td><td class="number ${item.available ? tone(item.profitPct) : "muted"}" data-label="평가손익률">${item.available ? pct(item.profitPct) : "조회 불가"}</td><td class="number">${item.weightPct === null ? "—" : `${number(item.weightPct)}%`}</td></tr>`).join("");
+    $("#holdings-body").innerHTML = data.holdings.map(item => `<tr><td><strong>${esc(item.name || item.ticker)}</strong><small>${esc(item.ticker)} · ${item.available ? esc(item.currency) : "시세 미확인"}</small></td><td class="number" data-label="수량">${number(item.quantity, 6)}</td><td class="number" data-label="최근 가격">${item.available ? money(item.price, item.currency) : "—"}${item.available ? `<small>가격 기준일 ${esc(item.asOf)}</small><small>자료 조회 ${esc(dataFetchedAt(item.fetchedAt))} (한국시간)</small>` : `<small>${esc(item.error || "최신 시세 미확인")}</small>`}<small class="price-cost-detail">평균 ${money(item.averageCost, item.currency)}</small></td><td class="number" data-label="평가금액">${money(item.value)}</td><td class="number ${item.available ? tone(item.profitPct) : "muted"}" data-label="평가손익률">${item.available ? pct(item.profitPct) : "조회 불가"}</td><td class="number">${item.weightPct === null ? "—" : `${number(item.weightPct)}%`}</td></tr>`).join("");
   } else {
     $("#holdings-body").innerHTML = `<tr><td colspan="6" class="empty-table"><strong>${registered ? "등록한 주식이 없습니다." : "아직 등록한 자산이 없습니다."}</strong><p>종목·보유 수량·평균 매입가를 입력하면 실제 보유 현황이 표시됩니다.</p><button class="button primary" data-edit-portfolio type="button">보유 자산 등록</button></td></tr>`;
   }
   const priceDates = [...new Set(data.holdings.filter(item => item.available).map(item => item.asOf))];
   $("#holdings-compact").innerHTML = `<strong>${registered && data.complete ? money(data.totalValue) : "—"}</strong><span>${data.holdings.length}개 종목 · ${data.complete ? "현금 포함 총자산" : "시세 미확인 · 합계 계산 보류"}</span><small class="compact-profit">평가손익 ${data.complete ? money(data.unrealizedProfit) : "—"}</small><small>가격 기준일 ${esc(priceDates.join(" · ") || "미확인")}</small>`;
   const fxNote = data.fx ? `환율 ${number(data.fx.value)}원/USD (가격 기준일 ${data.fx.asOf})` : "환율 조회 불가";
-  $("#valuation-note").textContent = `Yahoo 최근 일봉 · 가격 기준일은 거래소 현지 날짜이며 실시간 체결 시각은 제공하지 않습니다. 화면 조회 ${new Date(data.fetchedAt).toLocaleString("ko-KR", {timeZone: "Asia/Seoul", hour12: false})} (한국시간) · ${fxNote}. 종목별 평가손익을 표시 통화로 환산하며 취득 환율에 따른 환차손익·실현손익·배당 누계는 제외합니다.`;
-  $("#updated-at").textContent = `화면 조회 ${new Date(data.fetchedAt).toLocaleTimeString("ko-KR", {timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit"})} (한국시간)`;
+  const fetchedTimes = [...data.holdings.filter(item => item.available).map(item => item.fetchedAt), data.fx?.fetchedAt].filter(Boolean).sort();
+  const oldestFetch = fetchedTimes[0];
+  $("#valuation-note").textContent = `Yahoo 제공 시세 · 지연되거나 누락될 수 있으며 5분마다 자동 갱신합니다. 자료 조회 ${dataFetchedAt(oldestFetch)} (한국시간, 가장 오래된 자료 기준) · 가격 기준일은 거래소 현지 날짜이며 실시간 체결 시각은 제공하지 않습니다. 화면 조회 ${new Date(data.fetchedAt).toLocaleString("ko-KR", {timeZone: "Asia/Seoul", hour12: false})} (한국시간) · ${fxNote}. 종목별 평가손익을 표시 통화로 환산하며 취득 환율에 따른 환차손익·실현손익·배당 누계는 제외합니다.`;
+  $("#updated-at").textContent = `자료 조회 ${dataFetchedAt(oldestFetch)} (한국시간)`;
   renderAllocation(data);
   const check = data.rebalance;
   $("#rebalance-status").textContent = check ? `${check.message}${check.asOf ? ` 시세 기준 ${(check.quoteDates ?? [check.asOf]).join(" / ")} · 허용폭 ±${number(check.thresholdPct)}%p` : ""}` : "목표 비중을 입력해주세요.";
   $("#rebalance-body").innerHTML = (check?.items ?? []).map(item => `<tr><td><strong>${esc(item.name || item.ticker)}</strong>${item.name && item.name !== item.ticker ? `<small>${esc(item.ticker)}</small>` : ""}${item.needsRebalance ? " · 점검 필요" : ""}</td><td class="number" data-label="현재 비중">${number(item.weightPct)}%</td><td class="number" data-label="목표 비중">${number(item.targetWeightPct)}%</td><td class="number" data-label="차이 (%p)">${pct(item.driftPct).replace("%", "%p")}</td><td class="number">${money(item.adjustmentValue)}</td></tr>`).join("");
 }
-async function loadPortfolio() {
+async function loadPortfolio(refresh = false) {
+  lastPortfolioRefresh = Date.now();
   const sequence = ++portfolioSequence;
   ++goalSequence;
   portfolioBusy = true;
@@ -748,7 +756,7 @@ async function loadPortfolio() {
   showGoalPending("보유 자산을 평가한 뒤 목표 경로를 계산합니다.");
   updateRefreshButton();
   try {
-    const data = await api("/api/dashboard/portfolio", state.portfolio);
+    const data = await api("/api/dashboard/portfolio" + (refresh ? "?refresh=true" : ""), state.portfolio);
     if (sequence !== portfolioSequence) return;
     snapshot = data;
     renderPortfolio(data);
@@ -757,6 +765,7 @@ async function loadPortfolio() {
     if (sequence === portfolioSequence) {
       ["#total-assets", "#unrealized-profit", "#daily-change", "#cash-value"].forEach(selector => { $(selector).textContent = "—"; });
       $("#total-caption").textContent = "시세 조회 실패 · 새로고침해주세요";
+      $("#updated-at").textContent = "시세 조회 실패";
       $("#holdings-compact").textContent = "시세 조회 실패 · 새로고침해주세요";
       message(error.message || "자산 평가에 실패했습니다.");
       showGoalPending("자산 평가를 완료한 뒤 계산할 수 있습니다.");
@@ -968,7 +977,14 @@ document.addEventListener("click", event => {
 });
 $("#add-owned-position").addEventListener("click", () => addOwnedRow()?.querySelector('[name=ticker]').focus());
 $("#edit-goal-btn").addEventListener("click", openGoal);
-$("#refresh-btn").addEventListener("click", () => { loadPortfolio(); loadMarkets(); });
+function refreshDashboard(force = false) {
+  if (!layoutReady || cloudLoading || portfolioBusy || marketBusy || (!force && document.hidden)) return;
+  if (!force && Date.now() - Math.min(lastMarketRefresh, lastPortfolioRefresh) < 300000) return;
+  loadPortfolio(force);
+  loadMarkets(force);
+}
+$("#refresh-btn").addEventListener("click", () => refreshDashboard(true));
+setInterval(refreshDashboard, 30000);
 $("#portfolio-form").addEventListener("submit", async event => {
   event.preventDefault();
   try {
@@ -1058,7 +1074,8 @@ document.addEventListener("visibilitychange", async () => {
   try {
     const response = await fetch("/auth/session");
     const data = await response.json();
-    if ((data.user?.sub ?? null) !== accountSub) location.reload();
+    if ((data.user?.sub ?? null) !== accountSub) { location.reload(); return; }
+    refreshDashboard();
   } catch { /* API authorization still protects account data. */ }
 });
 let observedProjectionWidth = 0;

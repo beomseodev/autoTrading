@@ -21,7 +21,7 @@ function browser(user, stored = new Map(), isOwner = false, cloud = false) {
   const requests = [];
   const context = vm.createContext({
     console, Intl, Date, Number, Map, Set, JSON, structuredClone, crypto: require('node:crypto').webcrypto,
-    setTimeout: () => 1, clearTimeout() {},
+    setTimeout: () => 1, setInterval: () => 1, clearTimeout() {},
     document: {querySelector: node, createElement: element, addEventListener() {}},
     window: {addEventListener() {}},
     getComputedStyle: () => ({columnGap: '16px'}), matchMedia: () => ({matches: false}),

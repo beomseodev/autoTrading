@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from hashlib import sha256
 from pathlib import Path
+from threading import Lock
 
 import exchange_calendars as xcals
 import httpx
@@ -16,6 +17,7 @@ from app.services.alert_store import database
 from app.services.alert_metrics import record
 
 POLICY = "raw-split-only-v1"
+_calendar_lock = Lock()
 MIC = {"XNAS": ("USD", "America/New_York", "XNYS"), "XNMS": ("USD", "America/New_York", "XNYS"), "XNYS": ("USD", "America/New_York", "XNYS"),
        "XASE": ("USD", "America/New_York", "XNYS"), "ARCX": ("USD", "America/New_York", "XNYS"),
        "XKRX": ("KRW", "Asia/Seoul", "XKRX"), "XKOS": ("KRW", "Asia/Seoul", "XKRX")}
@@ -28,7 +30,9 @@ class DataPending(Exception):
 
 @lru_cache(maxsize=16)
 def calendar(name, year):
-    return xcals.get_calendar(name, start=f"{year - 10}-01-01", end=f"{year + 1}-12-31")
+    # XKRX initialization mutates shared holiday tables and must run serially.
+    with _calendar_lock:
+        return xcals.get_calendar(name, start=f"{year - 10}-01-01", end=f"{year + 1}-12-31")
 
 
 def expected_session(meta, cutoff):
