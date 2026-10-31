@@ -118,7 +118,7 @@ const server = http.createServer((req, res) => {
     await waitFor('document.querySelector("#data-loading").hidden');
     await send('Page.navigate', {url:'http://127.0.0.1:8777/lab'});
     await waitFor('document.querySelectorAll(".position-row").length === 3');
-    for (const width of [1280, 390, 320]) {
+    for (const width of [1280, 768, 390, 344, 320]) {
       await send('Emulation.setDeviceMetricsOverride', {width, height:900, deviceScaleFactor:1, mobile:false});
       assert(await evaluate('document.documentElement.scrollWidth <= innerWidth'), `Lab overflows at ${width}px`);
       fs.writeFileSync(`output/ux-lab-${width}.png`, Buffer.from((await send('Page.captureScreenshot', {format:'png'})).data, 'base64'));

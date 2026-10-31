@@ -254,6 +254,10 @@ const server = http.createServer((req,res)=>{
     await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});
     assert(await run('document.documentElement.scrollWidth<=window.innerWidth'),'Mobile overflow');
     fs.mkdirSync('output',{recursive:true});const screenshot=await send('Page.captureScreenshot',{format:'png'});fs.writeFileSync('output/stock-alerts-mobile.png',Buffer.from(screenshot.data,'base64'));
+    for (const width of [344,768]) {
+      await send('Emulation.setDeviceMetricsOverride',{width,height:900,deviceScaleFactor:1,mobile:true});
+      assert(await run('document.documentElement.scrollWidth<=window.innerWidth'),`Alerts overflow at ${width}px`);
+    }
     assert.deepEqual(errors,[]);console.log('Stock alerts Chrome: preview, selective import/retry, rule/data status, stale selection, ten types, editing, input preservation, mobile passed.');
   }finally{socket?.close();chrome.kill();await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1;server.close();});

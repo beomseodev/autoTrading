@@ -93,7 +93,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     await evaluate('document.documentElement.style.scrollBehavior="auto"');
     assert.equal(await evaluate('document.querySelector("#getting-started").hidden'), false);
     fs.writeFileSync('output/ux-home-desktop.png', Buffer.from((await send('Page.captureScreenshot', {format:'png'})).data, 'base64'));
-    for (const width of [390, 320]) {
+    for (const width of [390, 344, 320]) {
       await send('Emulation.setDeviceMetricsOverride', {width, height:844, deviceScaleFactor:1, mobile:false});
       assert(await evaluate('document.documentElement.scrollWidth <= innerWidth'), 'Empty home overflows on mobile');
       fs.writeFileSync(`output/ux-home-${width}.png`, Buffer.from((await send('Page.captureScreenshot', {format:'png'})).data, 'base64'));
@@ -356,6 +356,10 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.equal(await evaluate('document.querySelector("[data-panel=macro]").hidden'), false, 'A bookmarked section must reveal a saved hidden widget');
     assert.equal(await evaluate('document.activeElement.id'), 'macro');
     await evaluate('sessionStorage.removeItem("layout-fixture-state"); Object.keys(localStorage).filter(k=>k.startsWith(STORAGE_KEY)).forEach(k=>localStorage.removeItem(k))');
+    for (const width of [344, 768]) {
+      await send('Emulation.setDeviceMetricsOverride', {width, height:900, deviceScaleFactor:1, mobile:true});
+      assert(await evaluate('document.documentElement.scrollWidth <= innerWidth'), `Dashboard overflows at ${width}px`);
+    }
     assert.deepEqual(errors, []);
     console.log('Real Chrome passed: onboarding, mobile labels and sticky actions, form errors and input preservation, Escape/focus return, hidden sections and history/bookmarks, layout resizing, financial recovery and desktop/mobile overflow.');
   } finally {
