@@ -177,14 +177,44 @@ def fingerprint(snapshot):
     return sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def yahoo_daily(meta, start, target):
+    """Yahoo 일봉을 Twelve Data 응답 형식(무보정 가격 + 과거 가격 배수 분할)으로 바꾼다."""
+    # ponytail: Twelve Data 무료 한도(분당 8)로는 분할 조회(20 credits)가 불가능해 무료 Yahoo를 쓴다. 공식 계약 공급자가 필요해지면 provider_get 경로로 되돌린다.
+    import yfinance as yf
+    try:
+        record("dataCalls")
+        ticker = yf.Ticker(meta["symbol"])
+        frame = ticker.history(start=start.isoformat(), end=(target + timedelta(days=1)).isoformat(),
+                               auto_adjust=False, actions=True, raise_errors=True, timeout=20)
+        # Yahoo는 최신 일봉 종가를 늦게 채운다. 같은 거래일의 정규장 종가 메타데이터로만 보완한다(대시보드와 동일).
+        if not frame.empty and pd.isna(frame["Close"].iloc[-1]):
+            info = ticker.get_history_metadata()
+            when = datetime.fromtimestamp(float(info["regularMarketTime"]), timezone.utc)
+            day = frame.index[-1].date()
+            if when.astimezone(frame.index[-1].tzinfo).date() == day and when >= session_close(meta, day):
+                frame.iloc[-1, frame.columns.get_loc("Close")] = float(info["regularMarketPrice"])
+    except Exception:
+        raise DataPending("provider_unavailable") from None
+    frame = frame.dropna(subset=["Open", "High", "Low", "Close"])
+    # Yahoo 한국 일봉은 가끔 종가가 저가 밖에 있다. 판정은 종가 기준이라 고가·저가를 시가·종가를 포함하도록 넓힌다.
+    frame["High"] = frame[["Open", "High", "Close"]].max(axis=1)
+    frame["Low"] = frame[["Open", "Low", "Close"]].min(axis=1)
+    factors = frame["Stock Splits"].fillna(0) if "Stock Splits" in frame else pd.Series(0.0, index=frame.index)
+    factors = factors.where(factors > 0, 1.0)
+    # Yahoo는 과거 가격을 분할 보정해 주므로 이후 분할 배수를 곱해 원래 가격으로 되돌린다.
+    later = factors[::-1].cumprod()[::-1].shift(-1, fill_value=1.0)
+    values = [{"datetime": stamp.date().isoformat(), **{k: row[k.title()] * later[stamp] for k in ("open", "high", "low", "close")},
+               "volume": row["Volume"] / later[stamp]} for stamp, row in frame.iterrows()]
+    splits = [{"date": stamp.date().isoformat(), "ratio": 1 / f} for stamp, f in factors.items() if f != 1.0]
+    info = {"symbol": meta["providerSymbol"], "mic_code": meta["mic"], "currency": meta["currency"], "exchange_timezone": meta["timezone"]}
+    return {"meta": info, "values": values}, {"meta": info, "splits": splits}
+
+
 def load_daily_bars(meta, cutoff, previous=None):
     if meta.get('type')=='Forex':return load_fx_bars(cutoff,previous)
     target = expected_session(meta, cutoff)
-    params = {"symbol": meta["providerSymbol"], "mic_code": meta["mic"], "end_date": target.isoformat()}
-    if previous:
-        params["start_date"] = previous["raw"][0]["date"]
-    prices = provider_get("time_series", {**params, "interval": "1day", "adjust": "none", "outputsize": 5000 if previous else 1500})
-    splits = provider_get("splits", {**params, "range": "full"}, cost=20)
+    start = date.fromisoformat(previous["raw"][0]["date"]) if previous else target - timedelta(days=2200)
+    prices, splits = yahoo_daily(meta, start, target)
     halt_file = Path(__file__).parents[2] / "config" / "alert_trading_halts.json"
     try:
         confirmed = json.loads(halt_file.read_text(encoding="utf-8")).get(meta["symbol"], [])
