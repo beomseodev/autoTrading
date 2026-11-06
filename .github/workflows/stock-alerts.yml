@@ -1,9 +1,12 @@
 name: Stock alert checks
 on:
   schedule:
+    # GitHub 예약은 늦거나 빠질 수 있어 KST 08시대 외에 10·13·16시에도 요청한다. 이미 보낸 날은 아무것도 하지 않는다.
     - cron: '*/5 23 * * *'
+    - cron: '0 1,4,7 * * *'
   workflow_dispatch:
 permissions: {}
+concurrency: stock-alerts
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -13,4 +16,9 @@ jobs:
           ALERT_CRON_SECRET: ${{ secrets.ALERT_CRON_SECRET }}
         run: |
           test -n "$ALERT_CRON_SECRET"
-          curl --fail --silent --show-error --max-time 240 -H "Authorization: Bearer $ALERT_CRON_SECRET" https://autotrading-nu.vercel.app/api/cron/stock-alerts
+          # 시세는 5분 이상 간격으로 두 번 같아야 확정되므로 한 실행에서 6분 간격으로 세 번 요청한다.
+          for i in 1 2 3; do
+            [ "$i" = 1 ] || sleep 360
+            curl --fail --silent --show-error --max-time 240 -H "Authorization: Bearer $ALERT_CRON_SECRET" https://autotrading-nu.vercel.app/api/cron/stock-alerts
+            echo
+          done

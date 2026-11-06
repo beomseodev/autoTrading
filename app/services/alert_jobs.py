@@ -17,6 +17,9 @@ from app.services import alert_push
 
 UTC = timezone.utc
 KST = timezone(timedelta(hours=9))
+# GitHub 예약 실행은 몇 시간씩 늦으므로 08시 이후 그날 자정(KST)까지 받아 처리한다.
+DELIVERY_WINDOW = timedelta(hours=16)
+DATA_GRACE = timedelta(minutes=15)
 
 
 def utcnow():
@@ -53,7 +56,7 @@ def initialize(now):
                 WHERE p.digest_id=d.id AND p.status IN ('pending','sending','retryable_failed')))""",(day,)).fetchall()
         for digest in expired:alert_push.finalize_devices(conn,digest['id'],'missed_window')
         inserted = conn.execute("""INSERT INTO alert_runs(id,digest_date,cutoff,deadline) VALUES(%s,%s,%s,%s)
-            ON CONFLICT(digest_date) DO NOTHING RETURNING id""", (run_id, day, cutoff, cutoff + timedelta(hours=1))).fetchone()
+            ON CONFLICT(digest_date) DO NOTHING RETURNING id""", (run_id, day, cutoff, cutoff + DELIVERY_WINDOW)).fetchone()
         run = conn.execute("SELECT * FROM alert_runs WHERE digest_date=%s FOR UPDATE", (day,)).fetchone()
         if run["lease_until"] and run["lease_until"] > now:
             return None, None
@@ -502,7 +505,7 @@ def process_alert_run(*, now=None):
                 if len(pending)>64:status="data_pending"
             counts[status] = counts.get(status, 0) + 1
         return {"status": "dry_run", "counts": counts, "sending": False}
-    if now.astimezone(KST).hour != 8:
+    if now.astimezone(KST).hour < 8:
         return {"status": "outside_window"}
     if not email_configured() and not alert_push.public_key():
         raise HTTPException(503, "알림 메일 또는 웹 푸시 환경 설정이 필요합니다.")
@@ -532,7 +535,7 @@ def process_alert_run(*, now=None):
                 break
             try:
                 if task['kind'].startswith('fetch'):
-                    if now >= run["cutoff"] + timedelta(minutes=45):
+                    if now >= run["deadline"] - DATA_GRACE:
                         continue
                     if task['kind']=='fetch':fetch_task(task, run, token, now)
                     else:
@@ -565,7 +568,7 @@ def process_alert_run(*, now=None):
                     if task['kind']=='evaluate' and updated['status']=='deferred':
                         conn.execute('UPDATE alert_rules SET last_result=%s WHERE id=%s AND meaning_version=%s',
                             (json_value({'status':'deferred','reason':exc.code,'checkedDate':str(run['digest_date'])}),task['target_id'],task['payload']['meaning_version']))
-        if now >= run["cutoff"] + timedelta(minutes=45):
+        if now >= run["deadline"] - DATA_GRACE:
             with database() as conn:
                 fence(conn, run["id"], token)
                 conn.execute("UPDATE alert_tasks SET status='deferred',error='data_deadline',result=%s WHERE run_id=%s AND status='pending'", (json_value({"status": "deferred", "reason": "자료 마감 시각 초과"}), run["id"]))
