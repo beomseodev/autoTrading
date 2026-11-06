@@ -20,6 +20,8 @@ KST = timezone(timedelta(hours=9))
 # GitHub 예약 실행은 몇 시간씩 늦으므로 08시 이후 그날 자정(KST)까지 받아 처리한다.
 DELIVERY_WINDOW = timedelta(hours=16)
 DATA_GRACE = timedelta(minutes=15)
+# 아직 보내지 않은 묶음은 보류 작업이 다시 끝나면 새로 구성한다.
+REBUILDABLE = ('canceled', 'deferred', 'no_signals')
 
 
 def utcnow():
@@ -62,6 +64,10 @@ def initialize(now):
             return None, None
         run_id = run["id"]
         conn.execute("UPDATE alert_runs SET lease_token=%s,lease_until=now()+interval '270 seconds',status='running' WHERE id=%s", (token, run_id))
+        if not inserted and now < run["deadline"] - DATA_GRACE:
+            # 예약 실행이 하루에 몇 번 오므로, 앞선 실행에서 보류된 작업은 같은 날 다음 실행에서 다시 시도한다.
+            conn.execute("""UPDATE alert_tasks SET status='pending',attempts=0,error=NULL,next_attempt_at=now()
+                WHERE run_id=%s AND status='deferred'""", (run_id,))
         if inserted:
             audience = conn.execute("SELECT id FROM alert_users WHERE (consent AND suppressed IS NULL) OR push_consent").fetchall()
             conn.execute("UPDATE alert_runs SET audience=%s WHERE id=%s", (json_value([str(u["id"]) for u in audience]), run_id))
@@ -337,7 +343,7 @@ def prepare_digests(run, token, now, started):
             existing = conn.execute("SELECT * FROM alert_digests WHERE user_id=%s AND digest_date=%s AND kind<>'test' AND channel=%s", (user["id"], run["digest_date"],channel)).fetchone()
             devices=conn.execute('SELECT id FROM alert_push_subscriptions WHERE user_id=%s',(user['id'],)).fetchall() if not email else []
             holding_rules=conn.execute('SELECT id FROM alert_rules WHERE user_id=%s AND enabled AND NOT archived AND kind=ANY(%s) LIMIT 1',(user['id'],list(HOLDING_TYPES))).fetchone()
-        rebuild=existing and existing['status']=='canceled' and existing['attempts']==0 and existing['kind']==frequency
+        rebuild=existing and existing['status'] in REBUILDABLE and existing['attempts']==0 and existing['kind']==frequency
         if pending or (existing and not rebuild) or (not email and not devices):
             continue
         try:
@@ -356,7 +362,7 @@ def prepare_digests(run, token, now, started):
                 continue
             if rebuild:
                 latest=conn.execute('SELECT status,attempts FROM alert_digests WHERE id=%s FOR UPDATE',(existing['id'],)).fetchone()
-                if not latest or latest['status']!='canceled' or latest['attempts']!=0:continue
+                if not latest or latest['status'] not in REBUILDABLE or latest['attempts']!=0:continue
             period_filter='e.created_at >= %s' if frequency=='weekly' else 'e.session_date >= %s'
             period_start=run['cutoff']-timedelta(days=7) if frequency=='weekly' else run['digest_date']-timedelta(days=14)
             events = conn.execute(f"""SELECT e.*,i.metadata FROM alert_events e JOIN alert_rules r ON r.id=e.rule_id
